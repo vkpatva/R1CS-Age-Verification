@@ -1,6 +1,6 @@
 {
   "prime": 97,
-  "secretPoint": 11,
+  "commitment": "31f0ee4fe21d5775287384f0b563c385dec070888aded36d31af8ffb760433c8",
   "witness": {
     "layout": [
       "1",
@@ -16,10 +16,10 @@
     ]
   },
   "polynomialEvaluationsAtSecretPoint": {
-    "A_r": 91,
-    "B_r": 45,
-    "C_r": 38,
-    "H_r": 54
+    "A_r": 23,
+    "B_r": 11,
+    "C_r": 33,
+    "H_r": 65
   },
   "polynomialsLowToHighDegree": {
     "A_x": [
