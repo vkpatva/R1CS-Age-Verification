@@ -1,0 +1,14 @@
+{
+  "name": "zk-2bit-range-proof-r1cs-qap",
+  "version": "1.0.0",
+  "description": "2-bit range proof demo using R1CS and QAP from scratch",
+  "main": "setup.js",
+  "scripts": {
+    "setup": "node setup.js",
+    "prove": "node prover.js",
+    "verify": "node verifier.js",
+    "demo": "node setup.js && node prover.js 2 && node verifier.js",
+    "demo:age": "node setup.js && node prover.js"
+  },
+  "license": "MIT"
+}
