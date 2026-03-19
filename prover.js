@@ -1,4 +1,5 @@
 const fs = require("fs");
+const crypto = require("crypto");
 
 function mod(n, p) {
   return ((n % p) + p) % p;
@@ -22,6 +23,26 @@ function modInv(n, p) {
   }
   // Fermat's little theorem, p is prime
   return modPow(n, p - 2, p);
+}
+
+function sha256Hex(input) {
+  return crypto.createHash("sha256").update(String(input)).digest("hex");
+}
+
+function deriveChallengeR({ commitment, prime, publicSeed, forbiddenPoints }) {
+  // Fiat–Shamir-style: r is derived from transcript data (commitment + public seed),
+  // so the prover cannot pick an arbitrary r.
+  let counter = 0;
+  while (true) {
+    const toHash = `${commitment}|${publicSeed}|${counter}`;
+    const hex = sha256Hex(toHash);
+    // Use first 8 hex chars to get a deterministic number (fits in JS safe integer).
+    const num = parseInt(hex.slice(0, 8), 16);
+    const r = num % prime;
+    const isForbidden = (forbiddenPoints || []).includes(r);
+    if (!isForbidden) return r;
+    counter += 1;
+  }
 }
 
 function polyTrim(poly) {
@@ -537,11 +558,36 @@ function main() {
     throw new Error("Remainder is non-zero: witness does not satisfy constraints.");
   }
 
-  const secretPoint = 11;
-  console.log(`[Prover] Secret evaluation point selected: r=${secretPoint}`);
+  // Fiat–Shamir "challenge": r is derived from the prover's polynomial commitment (hash),
+  // plus public parameters, so the prover can't freely choose r after seeing the verifier.
+  const commitment = sha256Hex(
+    JSON.stringify({
+      A_x: APoly,
+      B_x: BPoly,
+      C_x: CPoly,
+      H_x: HPoly,
+    })
+  );
+  const publicSeed = JSON.stringify({
+    prime: p,
+    constraintPoints: points,
+    targetZCoeffsLowToHighDegree: Z,
+  });
+
+  const forbiddenPoints = [1, 2, 3];
+  const secretPoint = deriveChallengeR({
+    commitment,
+    prime: p,
+    publicSeed,
+    forbiddenPoints,
+  });
+
+  console.log(
+    `[Prover] Derived Fiat–Shamir challenge point r=${secretPoint} from commitment.`
+  );
   const payload = {
     prime: p,
-    secretPoint,
+    commitment,
     witness: {
       layout: requirements.witnessLayout,
       values: witness,
