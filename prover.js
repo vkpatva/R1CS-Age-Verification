@@ -139,13 +139,8 @@ function deriveChallengeR({ commitment, circuitDigest, prime, forbiddenPoints })
 // Helpers
 // ---------------------------------------------------------------------------
 
-function toBits4(age) {
-  return [
-    BigInt(age & 1),
-    BigInt((age >> 1) & 1),
-    BigInt((age >> 2) & 1),
-    BigInt((age >> 3) & 1),
-  ];
+function toBits(value, k) {
+  return Array.from({ length: k }, (_, i) => BigInt((value >> i) & 1));
 }
 
 function formatPoly(poly) {
@@ -463,35 +458,49 @@ function main() {
   const B = pk.r1cs.B.map((row) => row.map(BigInt));
   const C = pk.r1cs.C.map((row) => row.map(BigInt));
   const { circuitDigest } = pk;
+  const { lo, hi } = pk.range;
+  const k = pk.k;
 
   const ageRaw = process.argv[2];
-  const age = ageRaw === undefined ? 2 : Number(ageRaw);
+  const age = ageRaw === undefined ? lo : Number(ageRaw);
 
   console.log("========== PROVER START ==========");
   console.log(`\n[Prover] Reading proving_key.json`);
+  console.log(`[Prover] Proving range: age ∈ [${lo}, ${hi}]  (gap=${hi-lo}, k=${k} bits)`);
   console.log(`[Prover] Field prime p = ${p}  (2^61 - 1)`);
   console.log(`[Prover] Constraint points: [${points.join(", ")}]`);
   console.log(`[Prover] Circuit digest: ${circuitDigest}`);
   console.log(
-    `[Prover] Input age from CLI: ${ageRaw === undefined ? "(not provided, defaulting to 2)" : ageRaw}`
+    `[Prover] Input age from CLI: ${ageRaw === undefined ? `(not provided, defaulting to lo=${lo})` : ageRaw}`
   );
 
-  if (!Number.isInteger(age) || age < 0 || age > 15) {
-    throw new Error("Age must be an integer in [0, 15] for 4-bit range proof.");
+  if (!Number.isInteger(age) || age < lo || age > hi) {
+    throw new Error(`Age must be an integer in [${lo}, ${hi}].`);
   }
 
-  const [b0, b1, b2, b3] = toBits4(age);
+  // a = age - lo  (left distance, proves age ≥ lo)
+  // b = hi - age  (right distance, proves age ≤ hi)
+  // Both are decomposed into k bits; the constraints enforce a + b = gap.
+  const a = age - lo;
+  const b = hi - age;
+  const aBits = toBits(a, k);
+  const bBits = toBits(b, k);
+
   // The witness is private — it will NOT be written to proof.json.
-  const witness = [1n, BigInt(age), b0, b1, b2, b3];
+  const witness = [1n, BigInt(age), ...aBits, ...bBits];
+
   console.log(`\n[Prover] ===== Witness Construction =====`);
-  console.log(`[Prover] Witness w = [1, age, b0, b1, b2, b3]  (PRIVATE — not written to proof.json)`);
+  console.log(`[Prover] Witness w = [1, age, a0..a${k-1}, b0..b${k-1}]  (PRIVATE — not written to proof.json)`);
   console.log(`[Prover] age = ${age}`);
-  console.log(`[Prover] 4-bit decomposition: ${age} in binary = b3 b2 b1 b0 = ${b3} ${b2} ${b1} ${b0}`);
-  console.log(`[Prover]   b0 = age & 1         = ${b0}  (bit weight 1)`);
-  console.log(`[Prover]   b1 = (age >> 1) & 1  = ${b1}  (bit weight 2)`);
-  console.log(`[Prover]   b2 = (age >> 2) & 1  = ${b2}  (bit weight 4)`);
-  console.log(`[Prover]   b3 = (age >> 3) & 1  = ${b3}  (bit weight 8)`);
-  console.log(`[Prover]   Verify: b0 + 2*b1 + 4*b2 + 8*b3 = ${b0 + 2n*b1 + 4n*b2 + 8n*b3}  (should equal age=${age})`);
+  console.log(`[Prover] a = age - lo = ${age} - ${lo} = ${a}  (left  distance)`);
+  console.log(`[Prover] b = hi - age = ${hi} - ${age} = ${b}  (right distance)`);
+  console.log(`[Prover] ${k}-bit decomposition of a=${a}:`);
+  aBits.forEach((bit, i) => console.log(`[Prover]   a${i} = (${a} >> ${i}) & 1 = ${bit}  (weight ${2**i})`));
+  console.log(`[Prover]   Verify: ${aBits.map((bit,i)=>`${2**i}*${bit}`).join(" + ")} = ${aBits.reduce((s,bit,i)=>s+BigInt(2**i)*bit,0n)}  (expected a=${a})`);
+  console.log(`[Prover] ${k}-bit decomposition of b=${b}:`);
+  bBits.forEach((bit, i) => console.log(`[Prover]   b${i} = (${b} >> ${i}) & 1 = ${bit}  (weight ${2**i})`));
+  console.log(`[Prover]   Verify: ${bBits.map((bit,i)=>`${2**i}*${bit}`).join(" + ")} = ${bBits.reduce((s,bit,i)=>s+BigInt(2**i)*bit,0n)}  (expected b=${b})`);
+  console.log(`[Prover]   a + b = ${a} + ${b} = ${a+b}  (expected gap=${hi-lo}) ✓`);
   console.log(`[Prover] w = [${witness.join(", ")}]`);
   console.log(`[Prover] ============================================`);
 

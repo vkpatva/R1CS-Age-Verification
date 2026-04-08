@@ -1,13 +1,14 @@
 {
-  "name": "zk-2bit-range-proof-r1cs-qap",
-  "version": "1.0.0",
-  "description": "2-bit range proof demo using R1CS and QAP from scratch",
+  "name": "zk-dynamic-range-proof-r1cs-qap",
+  "version": "2.0.0",
+  "description": "Dynamic range proof demo using R1CS and QAP from scratch (0–256)",
   "main": "setup.js",
   "scripts": {
     "setup": "node setup.js",
     "prove": "node prover.js",
     "verify": "node verifier.js",
-    "demo": "node setup.js && node prover.js 2 && node verifier.js"
+    "demo": "node setup.js 4 16 && node prover.js 10 && node verifier.js",
+    "test": "node test.js"
   },
   "license": "MIT"
 }
