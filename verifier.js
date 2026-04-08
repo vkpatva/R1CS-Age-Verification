@@ -142,7 +142,7 @@ function logDetailedEvaluation(label, poly, r, p, result) {
   console.log(`[Verifier] ${label}(r) = ${result}`);
 }
 
-function logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p) {
+function logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p, degP) {
   console.log(`\n[Verifier] --- Step 4: QAP Identity Check ---`);
   console.log(`[Verifier] Check: A(r)*B(r) - C(r)  ==  H(r)*Z(r)  (mod p)`);
   console.log(`[Verifier]`);
@@ -150,7 +150,7 @@ function logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p) {
   console.log(`[Verifier]   If the prover has a valid witness then P(x)=A(x)*B(x)-C(x) = H(x)*Z(x)`);
   console.log(`[Verifier]   as a polynomial identity. By Schwartz-Zippel, if this does NOT hold`);
   console.log(`[Verifier]   everywhere but DOES hold at the random challenge r, the probability`);
-  console.log(`[Verifier]   is at most deg(P)/|F| = 4/${p} ≈ 2^-59.`);
+  console.log(`[Verifier]   is at most deg(P)/|F| = ${degP}/${p} ≈ 2^${(Math.log2(degP) - 61).toFixed(1)}.`);;
   console.log(`[Verifier]   So a passing check means the identity almost certainly holds everywhere.`);
   console.log(`[Verifier]`);
   console.log(`[Verifier] Z(r) is computed by the verifier from verification_key.json — public info.`);
@@ -276,7 +276,8 @@ function main() {
   // -------------------------------------------------------------------------
   // Step 4: QAP identity check
   // -------------------------------------------------------------------------
-  const passed = logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p);
+  const degP = 2 * (Z.length - 2); // deg(A*B) = 2*(numConstraints-1), numConstraints = Z.length-1
+  const passed = logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p, degP);
 
   console.log(`\n`);
   if (passed) {

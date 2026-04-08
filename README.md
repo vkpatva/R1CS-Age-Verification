@@ -103,8 +103,8 @@ Circuits can't check `a ≥ 0` directly either. But they can check something equ
 
 So the prover decomposes `a` and `b` into bits:
 ```
-a = 82  = 0·1 + 1·2 + 0·4 + 1·8 + 0·16 + 1·32 + 0·64 + 1·128
-        →  a0=0, a1=1, a2=0, a3=1, a4=0, a5=1, a6=0, a7=1
+a = 82  = 0·1 + 1·2 + 0·4 + 0·8 + 1·16 + 0·32 + 1·64 + 0·128
+        →  a0=0, a1=1, a2=0, a3=0, a4=1, a5=0, a6=1, a7=0
 
 b = 156 = 0·1 + 0·2 + 1·4 + 1·8 + 1·16 + 0·32 + 0·64 + 1·128
         →  b0=0, b1=0, b2=1, b3=1, b4=1, b5=0, b6=0, b7=1
@@ -369,22 +369,39 @@ r = BigInt(sha256(commitment | circuitDigest | counter)) mod p
 
 Soundness error (Schwartz–Zippel): a cheating prover passes with probability at most `deg(P) / |F|`.
 
-| Range     | k | deg(P) | Soundness error |
-|-----------|---|--------|-----------------|
-| [0, 15]   | 4 |  18    | ≈ 2⁻⁵⁵          |
-| [18, 256] | 8 |  34    | ≈ 2⁻⁵³          |
-| [0, 256]  | 9 |  38    | ≈ 2⁻⁵³          |
+| Range     | k | deg(P) | Soundness error           |
+|-----------|---|--------|---------------------------|
+| [0, 15]   | 4 |  18    | 18/2⁶¹ ≈ 2⁻⁵⁷             |
+| [18, 256] | 8 |  34    | 34/2⁶¹ ≈ 2⁻⁵⁶             |
+| [0, 256]  | 9 |  38    | 38/2⁶¹ ≈ 2⁻⁵⁶             |
 
 ---
 
 ## ZK Limitation Note
 
-Polynomial coefficients in `proof.json` are a deterministic function of the witness, so they
-implicitly encode it. This demo is not fully zero-knowledge.
+**This demo is not zero-knowledge.** The polynomial coefficients in `proof.json` are a
+deterministic function of the witness — a verifier who receives them can reconstruct `age`,
+`a = age − lo`, and `b = hi − age` exactly by evaluating the polynomials at the constraint
+points and reading off the R1CS dot products.
 
-True ZK requires replacing the hash-based commitment with an **EC polynomial commitment**
-(e.g. KZG/Kate commitments using elliptic curve pairings) where the verifier checks evaluations
-without seeing coefficients. That requires bilinear pairings and is beyond the scope of this demo.
+The random `salt` only prevents two proofs for the same age from having identical commitments
+(commitment uniqueness / unlinkability between runs). It does **not** hide the coefficients
+themselves from the verifier.
+
+### What true ZK requires
+
+Replace the hash-based commitment with a **KZG (Kate) polynomial commitment**:
+
+1. **Trusted setup** — a one-time ceremony produces a structured reference string
+   `[τ⁰]G, [τ¹]G, …, [τⁿ]G` (elliptic curve points encoding powers of a secret `τ`).
+2. **Commit** — the prover sends a single curve point `C = [f(τ)]G` per polynomial,
+   with a random blinding factor added. The verifier sees only this point — never the coefficients.
+3. **Evaluation proof** — to prove `f(r) = v`, the prover sends a short quotient commitment;
+   the verifier checks it with a **pairing equation** `e(C − [v]G, G) = e([q(τ)]G, [τ − r]G)`.
+   No coefficients are ever revealed.
+
+This requires bilinear pairings over a pairing-friendly curve (e.g. BN254) and is beyond the
+scope of this educational demo.
 
 ---
 

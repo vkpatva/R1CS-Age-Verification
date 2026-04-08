@@ -475,7 +475,8 @@ function main() {
   );
 
   if (!Number.isInteger(age) || age < lo || age > hi) {
-    throw new Error(`Age must be an integer in [${lo}, ${hi}].`);
+    console.error(`Error: age must be an integer in [${lo}, ${hi}].`);
+    process.exit(1);
   }
 
   // a = age - lo  (left distance, proves age ≥ lo)
@@ -546,8 +547,9 @@ function main() {
   // Lagrange interpolation
   // -------------------------------------------------------------------------
   console.log(`\n[Prover] ===== Lagrange Interpolation =====`);
-  console.log(`[Prover] Build degree-≤2 polynomials A(x), B(x), C(x) that pass through the`);
-  console.log(`[Prover] R1CS values at constraint points.`);
+  const numConstraints = points.length;
+  console.log(`[Prover] Build degree-≤${numConstraints-1} polynomials A(x), B(x), C(x) that pass through the`);
+  console.log(`[Prover] R1CS values at all ${numConstraints} constraint points.`);
 
   logDetailedLagrangeForLabel("A", points, aVals, p);
   logDetailedLagrangeForLabel("B", points, bVals, p);
@@ -579,8 +581,8 @@ function main() {
   // Fiat–Shamir commitment
   // -------------------------------------------------------------------------
   // Generate a fresh random salt so every proof run produces a unique commitment,
-  // even for the same witness.  Without this, an adversary could precompute the
-  // 4 possible proofs (age 0-3) and match against the submitted proof to learn age.
+  // even for the same witness.  Without this, an adversary could precompute all
+  // (hi-lo+1) possible proofs and match against the submitted proof to learn age.
   const salt = crypto.randomBytes(32).toString("hex");
 
   const commitInput = JSON.stringify({
