@@ -7,8 +7,7 @@
     "setup": "node setup.js",
     "prove": "node prover.js",
     "verify": "node verifier.js",
-    "demo": "node setup.js && node prover.js 2 && node verifier.js",
-    "demo:age": "node setup.js && node prover.js"
+    "demo": "node setup.js && node prover.js 2 && node verifier.js"
   },
   "license": "MIT"
 }

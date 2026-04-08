@@ -1,45 +1,19 @@
 {
-  "prime": 97,
-  "commitment": "129ee958b7e6f78686c3f338088dd2a5a7be86eb917c52f42a3a36ad81188721",
-  "witness": {
-    "layout": [
-      "1",
-      "age",
-      "b0",
-      "b1"
-    ],
-    "values": [
-      1,
-      1,
-      1,
-      0
-    ]
-  },
-  "polynomialEvaluationsAtSecretPoint": {
-    "A_r": 33,
-    "B_r": 9,
-    "C_r": 74,
-    "H_r": 76
-  },
-  "polynomialsLowToHighDegree": {
+  "commitment": "d1eb46a9c267f0fecb937404055ca2038ff6c1151b3ee5a83094e1fa580bd9bb",
+  "polynomialCoefficients": {
     "A_x": [
-      4,
-      93,
-      1
+      "2305843009213693950",
+      "1"
     ],
     "B_x": [
-      4,
-      43,
-      50
+      "2305843009213693949",
+      "1"
     ],
     "C_x": [
-      1,
-      47,
-      49
+      "2",
+      "2305843009213693948",
+      "1"
     ],
-    "H_x": [
-      46,
-      50
-    ]
+    "H_x": []
   }
 }

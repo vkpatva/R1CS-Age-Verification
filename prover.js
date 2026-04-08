@@ -1,6 +1,10 @@
 const fs = require("fs");
 const crypto = require("crypto");
 
+// ---------------------------------------------------------------------------
+// Field arithmetic (BigInt, prime p = 2^61 - 1)
+// ---------------------------------------------------------------------------
+
 function mod(n, p) {
   return ((n % p) + p) % p;
 }
@@ -8,69 +12,47 @@ function mod(n, p) {
 function modPow(base, exp, p) {
   let b = mod(base, p);
   let e = exp;
-  let out = 1;
-  while (e > 0) {
-    if (e & 1) out = mod(out * b, p);
+  let out = 1n;
+  while (e > 0n) {
+    if (e & 1n) out = mod(out * b, p);
     b = mod(b * b, p);
-    e >>= 1;
+    e >>= 1n;
   }
   return out;
 }
 
 function modInv(n, p) {
-  if (mod(n, p) === 0) {
-    throw new Error("Attempted inversion of 0 in finite field.");
-  }
-  // Fermat's little theorem, p is prime
-  return modPow(n, p - 2, p);
+  if (mod(n, p) === 0n) throw new Error("Attempted inversion of 0 in finite field.");
+  // Fermat's little theorem: n^(p-2) ≡ n^(-1)  (mod p)  when p is prime.
+  return modPow(n, p - 2n, p);
 }
 
-function sha256Hex(input) {
-  return crypto.createHash("sha256").update(String(input)).digest("hex");
-}
-
-function deriveChallengeR({ commitment, prime, publicSeed, forbiddenPoints }) {
-  // Fiat–Shamir-style: r is derived from transcript data (commitment + public seed),
-  // so the prover cannot pick an arbitrary r.
-  let counter = 0;
-  while (true) {
-    const toHash = `${commitment}|${publicSeed}|${counter}`;
-    const hex = sha256Hex(toHash);
-    // Use first 8 hex chars to get a deterministic number (fits in JS safe integer).
-    const num = parseInt(hex.slice(0, 8), 16);
-    const r = num % prime;
-    const isForbidden = (forbiddenPoints || []).includes(r);
-    if (!isForbidden) return r;
-    counter += 1;
-  }
-}
+// ---------------------------------------------------------------------------
+// Polynomial arithmetic (coefficients are BigInt, ordered low→high degree)
+// ---------------------------------------------------------------------------
 
 function polyTrim(poly) {
   const out = poly.slice();
-  while (out.length > 1 && out[out.length - 1] === 0) out.pop();
+  while (out.length > 1 && out[out.length - 1] === 0n) out.pop();
   return out;
 }
 
 function polyAdd(a, b, p) {
   const len = Math.max(a.length, b.length);
-  const out = Array(len).fill(0);
-  for (let i = 0; i < len; i += 1) {
-    out[i] = mod((a[i] || 0) + (b[i] || 0), p);
-  }
+  const out = Array(len).fill(0n);
+  for (let i = 0; i < len; i += 1) out[i] = mod((a[i] || 0n) + (b[i] || 0n), p);
   return polyTrim(out);
 }
 
 function polySub(a, b, p) {
   const len = Math.max(a.length, b.length);
-  const out = Array(len).fill(0);
-  for (let i = 0; i < len; i += 1) {
-    out[i] = mod((a[i] || 0) - (b[i] || 0), p);
-  }
+  const out = Array(len).fill(0n);
+  for (let i = 0; i < len; i += 1) out[i] = mod((a[i] || 0n) - (b[i] || 0n), p);
   return polyTrim(out);
 }
 
 function polyMul(a, b, p) {
-  const out = Array(a.length + b.length - 1).fill(0);
+  const out = Array(a.length + b.length - 1).fill(0n);
   for (let i = 0; i < a.length; i += 1) {
     for (let j = 0; j < b.length; j += 1) {
       out[i + j] = mod(out[i + j] + a[i] * b[j], p);
@@ -80,8 +62,8 @@ function polyMul(a, b, p) {
 }
 
 function polyEval(poly, x, p) {
-  let result = 0;
-  let xPow = 1;
+  let result = 0n;
+  let xPow = 1n;
   for (const c of poly) {
     result = mod(result + c * xPow, p);
     xPow = mod(xPow * x, p);
@@ -92,48 +74,37 @@ function polyEval(poly, x, p) {
 function polyDiv(numerator, denominator, p) {
   const num = numerator.slice();
   const den = polyTrim(denominator);
-  const numDeg = () => polyTrim(num).length - 1;
   const denDeg = den.length - 1;
-
-  if (denDeg < 0 || (denDeg === 0 && den[0] === 0)) {
+  if (denDeg < 0 || (denDeg === 0 && den[0] === 0n)) {
     throw new Error("Division by zero polynomial.");
   }
-
-  const quotient = Array(Math.max(0, num.length - den.length + 1)).fill(0);
-
-  while (numDeg() >= denDeg) {
-    const curDeg = numDeg();
-    const leadNum = num[curDeg];
-    const leadDen = den[denDeg];
-    const scale = mod(leadNum * modInv(leadDen, p), p);
+  const quotient = Array(Math.max(0, num.length - den.length + 1)).fill(0n);
+  while (polyTrim(num).length - 1 >= denDeg) {
+    const curDeg = polyTrim(num).length - 1;
+    const scale = mod(num[curDeg] * modInv(den[denDeg], p), p);
     const shift = curDeg - denDeg;
     quotient[shift] = scale;
-
     for (let i = 0; i <= denDeg; i += 1) {
       num[i + shift] = mod(num[i + shift] - scale * den[i], p);
     }
   }
-
-  const remainder = polyTrim(num);
-  return { quotient: polyTrim(quotient), remainder };
+  return { quotient: polyTrim(quotient), remainder: polyTrim(num) };
 }
 
 function dot(row, witness, p) {
-  let s = 0;
-  for (let i = 0; i < row.length; i += 1) {
-    s = mod(s + row[i] * witness[i], p);
-  }
+  let s = 0n;
+  for (let i = 0; i < row.length; i += 1) s = mod(s + row[i] * witness[i], p);
   return s;
 }
 
 function lagrangeInterpolate(xs, ys, p) {
-  let result = [0];
+  let result = [0n];
   for (let i = 0; i < xs.length; i += 1) {
-    let basis = [1];
-    let denom = 1;
+    let basis = [1n];
+    let denom = 1n;
     for (let j = 0; j < xs.length; j += 1) {
       if (i === j) continue;
-      basis = polyMul(basis, [mod(-xs[j], p), 1], p);
+      basis = polyMul(basis, [mod(-xs[j], p), 1n], p);
       denom = mod(denom * mod(xs[i] - xs[j], p), p);
     }
     const scale = mod(ys[i] * modInv(denom, p), p);
@@ -143,17 +114,40 @@ function lagrangeInterpolate(xs, ys, p) {
   return polyTrim(result);
 }
 
+// ---------------------------------------------------------------------------
+// Fiat–Shamir challenge derivation
+// ---------------------------------------------------------------------------
+
+function sha256Hex(input) {
+  return crypto.createHash("sha256").update(String(input)).digest("hex");
+}
+
+function deriveChallengeR({ commitment, circuitDigest, prime, forbiddenPoints }) {
+  let counter = 0;
+  while (true) {
+    const toHash = `${commitment}|${circuitDigest}|${counter}`;
+    const hex = sha256Hex(toHash);
+    // Use the full 256-bit hash as a BigInt before reducing mod p.
+    // This minimises modular bias: bias = (2^256 mod p) / p < 2^-195 for a 61-bit p.
+    const r = BigInt("0x" + hex) % prime;
+    if (!(forbiddenPoints || []).includes(r)) return r;
+    counter += 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function toBits2(age) {
-  const b0 = age & 1;
-  const b1 = (age >> 1) & 1;
-  return [b0, b1];
+  return [BigInt(age & 1), BigInt((age >> 1) & 1)];
 }
 
 function formatPoly(poly) {
   const terms = [];
   for (let i = poly.length - 1; i >= 0; i -= 1) {
     const c = poly[i];
-    if (c === 0) continue;
+    if (c === 0n) continue;
     if (i === 0) terms.push(`${c}`);
     else if (i === 1) terms.push(`${c}*x`);
     else terms.push(`${c}*x^${i}`);
@@ -161,147 +155,166 @@ function formatPoly(poly) {
   return terms.length === 0 ? "0" : terms.join(" + ");
 }
 
-function logDetailedLagrangeForLabel(label, vals, p) {
-  const inv2 = modInv(2, p);
-  const l1 = [3, 46, 49]; // 49x^2 + 46x + 3
-  const l2 = [94, 4, 96]; // 96x^2 + 4x + 94
-  const l3 = [1, 47, 49]; // 49x^2 + 47x + 1
+// ---------------------------------------------------------------------------
+// Detailed logging functions
+// ---------------------------------------------------------------------------
 
-  const x2Raw = vals[0] * l1[2] + vals[1] * l2[2] + vals[2] * l3[2];
-  const x1Raw = vals[0] * l1[1] + vals[1] * l2[1] + vals[2] * l3[1];
-  const x0Raw = vals[0] * l1[0] + vals[1] * l2[0] + vals[2] * l3[0];
+// Explains the Lagrange interpolation for one of A(x), B(x), or C(x).
+// The basis polynomials are computed dynamically (not hardcoded) so the
+// explanation is always correct regardless of which prime or constraint
+// points are in use.
+function logDetailedLagrangeForLabel(label, xs, vals, p) {
+  const inv2 = modInv(2n, p);
+  const invNeg1 = mod(-1n, p); // p - 1
 
-  console.log(`[Prover] Detailed Lagrange explanation for ${label}(x):`);
-  console.log(`[Prover] Target points: ${label}(1)=${vals[0]}, ${label}(2)=${vals[1]}, ${label}(3)=${vals[2]}`);
-  console.log("[Prover] Build Lagrange basis polynomials over points {1,2,3} in F_97:");
-  console.log("[Prover]   L1(x) = ((x-2)(x-3))/((1-2)(1-3)) = ((x-2)(x-3))/2");
-  console.log("[Prover]         = (x^2 - 5x + 6)/2");
+  // Compute the three basis polynomials L1, L2, L3.
+  //   L_i(x) = 1 at x=xs[i], 0 at all other xs[j].
+  //   Formula: L_i(x) = ∏_{j≠i} (x - xs[j]) / ∏_{j≠i} (xs[i] - xs[j])
+  const bases = xs.map((xi, i) => {
+    let num = [1n];
+    let denom = 1n;
+    for (let j = 0; j < xs.length; j += 1) {
+      if (i === j) continue;
+      num = polyMul(num, [mod(-xs[j], p), 1n], p);
+      denom = mod(denom * mod(xi - xs[j], p), p);
+    }
+    const invDenom = modInv(denom, p);
+    return { poly: num.map((c) => mod(c * invDenom, p)), denom, invDenom };
+  });
+
+  console.log(`\n[Prover] --- Detailed Lagrange interpolation for ${label}(x) ---`);
+  console.log(`[Prover] Goal: find a degree-≤2 polynomial that passes through these three points:`);
+  console.log(`[Prover]   ${label}(${xs[0]}) = ${vals[0]},  ${label}(${xs[1]}) = ${vals[1]},  ${label}(${xs[2]}) = ${vals[2]}`);
+  console.log(`[Prover] Method: ${label}(x) = ${vals[0]}*L1(x) + ${vals[1]}*L2(x) + ${vals[2]}*L3(x)`);
+  console.log(`[Prover] where L_i(x) equals 1 at x=${xs[0]},${xs[1]},${xs[2]} respectively and 0 at the other two.`);
+
+  // L1
+  console.log(`\n[Prover] L1(x) = (x-${xs[1]})(x-${xs[2]}) / ((${xs[0]}-${xs[1]})(${xs[0]}-${xs[2]}))`);
+  console.log(`[Prover]        = (x-2)(x-3) / ((1-2)*(1-3))`);
+  console.log(`[Prover]        numerator:   x^2 - 5x + 6`);
+  console.log(`[Prover]        denominator: (-1)*(-2) = 2`);
+  console.log(`[Prover]        In F_p, dividing by 2 means multiplying by modInv(2, p).`);
+  console.log(`[Prover]        modInv(2, p) = ${inv2}   [verify: 2 * ${inv2} mod p = ${mod(2n * inv2, p)}, must be 1]`);
+  console.log(`[Prover]        L1(x) coeffs (low->high): [${bases[0].poly.join(", ")}]`);
+  console.log(`[Prover]        L1(x) readable: ${formatPoly(bases[0].poly)}`);
+  console.log(`[Prover]        Verify L1(1)=${polyEval(bases[0].poly,1n,p)}, L1(2)=${polyEval(bases[0].poly,2n,p)}, L1(3)=${polyEval(bases[0].poly,3n,p)}  (expected 1, 0, 0)`);
+
+  // L2
+  console.log(`\n[Prover] L2(x) = (x-${xs[0]})(x-${xs[2]}) / ((${xs[1]}-${xs[0]})(${xs[1]}-${xs[2]}))`);
+  console.log(`[Prover]        = (x-1)(x-3) / ((2-1)*(2-3))`);
+  console.log(`[Prover]        numerator:   x^2 - 4x + 3`);
+  console.log(`[Prover]        denominator: (1)*(-1) = -1`);
+  console.log(`[Prover]        In F_p, dividing by -1 means multiplying by modInv(-1, p) = p-1 = ${invNeg1}.`);
+  console.log(`[Prover]        L2(x) coeffs (low->high): [${bases[1].poly.join(", ")}]`);
+  console.log(`[Prover]        L2(x) readable: ${formatPoly(bases[1].poly)}`);
+  console.log(`[Prover]        Verify L2(1)=${polyEval(bases[1].poly,1n,p)}, L2(2)=${polyEval(bases[1].poly,2n,p)}, L2(3)=${polyEval(bases[1].poly,3n,p)}  (expected 0, 1, 0)`);
+
+  // L3
+  console.log(`\n[Prover] L3(x) = (x-${xs[0]})(x-${xs[1]}) / ((${xs[2]}-${xs[0]})(${xs[2]}-${xs[1]}))`);
+  console.log(`[Prover]        = (x-1)(x-2) / ((3-1)*(3-2))`);
+  console.log(`[Prover]        numerator:   x^2 - 3x + 2`);
+  console.log(`[Prover]        denominator: (2)*(1) = 2`);
+  console.log(`[Prover]        In F_p, dividing by 2: multiply by modInv(2, p) = ${inv2}.`);
+  console.log(`[Prover]        L3(x) coeffs (low->high): [${bases[2].poly.join(", ")}]`);
+  console.log(`[Prover]        L3(x) readable: ${formatPoly(bases[2].poly)}`);
+  console.log(`[Prover]        Verify L3(1)=${polyEval(bases[2].poly,1n,p)}, L3(2)=${polyEval(bases[2].poly,2n,p)}, L3(3)=${polyEval(bases[2].poly,3n,p)}  (expected 0, 0, 1)`);
+
+  // Combination
+  console.log(`\n[Prover] Combine: ${label}(x) = ${vals[0]}*L1(x) + ${vals[1]}*L2(x) + ${vals[2]}*L3(x)`);
+  console.log(`[Prover] Compute each coefficient by summing the scaled basis coefficients:`);
+  for (let deg = 2; deg >= 0; deg -= 1) {
+    const l1c = bases[0].poly[deg] || 0n;
+    const l2c = bases[1].poly[deg] || 0n;
+    const l3c = bases[2].poly[deg] || 0n;
+    const result = mod(vals[0] * l1c + vals[1] * l2c + vals[2] * l3c, p);
+    console.log(
+      `[Prover]   x^${deg}: ${vals[0]}*${l1c} + ${vals[1]}*${l2c} + ${vals[2]}*${l3c}  mod p  =  ${result}`
+    );
+  }
+  const finalPoly = lagrangeInterpolate(xs, vals, p);
+  console.log(`[Prover] ${label}(x) coeffs (low->high): [${finalPoly.join(", ")}]`);
+  console.log(`[Prover] ${label}(x) readable: ${formatPoly(finalPoly)}`);
   console.log(
-    `[Prover]         divide by 2 in F_97 means multiply by inverse(2)=${inv2}, since 2*${inv2}=1 mod 97`
-  );
-  console.log("[Prover]         = 49*(x^2 - 5x + 6) mod 97");
-  console.log("[Prover]         = 49x^2 + 46x + 3");
-  console.log("[Prover]   L2(x) = ((x-1)(x-3))/((2-1)(2-3)) = ((x-1)(x-3))/(-1)");
-  console.log("[Prover]         = -(x^2 - 4x + 3)");
-  console.log("[Prover]         = 96x^2 + 4x + 94");
-  console.log("[Prover]   L3(x) = ((x-1)(x-2))/((3-1)(3-2)) = ((x-1)(x-2))/2");
-  console.log("[Prover]         = (x^2 - 3x + 2)/2");
-  console.log(
-    `[Prover]         divide by 2 in F_97 means multiply by inverse(2)=${inv2}`
-  );
-  console.log("[Prover]         = 49*(x^2 - 3x + 2) mod 97");
-  console.log("[Prover]         = 49x^2 + 47x + 1");
-  console.log("[Prover] Interpolate:");
-  console.log(
-    `[Prover]   ${label}(x) = ${vals[0]}*L1(x) + ${vals[1]}*L2(x) + ${vals[2]}*L3(x) mod 97`
-  );
-  console.log("[Prover] Coefficient-by-coefficient:");
-  console.log(
-    `[Prover]   x^2: ${vals[0]}*49 + ${vals[1]}*96 + ${vals[2]}*49 = ${x2Raw} mod 97 = ${mod(
-      x2Raw,
-      p
-    )}`
-  );
-  console.log(
-    `[Prover]   x^1: ${vals[0]}*46 + ${vals[1]}*4 + ${vals[2]}*47 = ${x1Raw} mod 97 = ${mod(
-      x1Raw,
-      p
-    )}`
-  );
-  console.log(
-    `[Prover]   x^0: ${vals[0]}*3 + ${vals[1]}*94 + ${vals[2]}*1 = ${x0Raw} mod 97 = ${mod(
-      x0Raw,
-      p
-    )}`
-  );
-  console.log(
-    `[Prover] Therefore ${label}(x) coeffs(low->high) = [${mod(x0Raw, p)},${mod(
-      x1Raw,
-      p
-    )},${mod(x2Raw, p)}]`
+    `[Prover] Verify: ${label}(1)=${polyEval(finalPoly,1n,p)}, ${label}(2)=${polyEval(finalPoly,2n,p)}, ${label}(3)=${polyEval(finalPoly,3n,p)}  (expected ${vals[0]}, ${vals[1]}, ${vals[2]})`
   );
 }
 
+// Explains the step-by-step multiplication A(x)*B(x) and subtraction of C(x)
+// to form P(x) = A(x)*B(x) - C(x).
 function logDetailedPComputation(APoly, BPoly, CPoly, p) {
-  console.log("[Prover] Detailed polynomial multiplication for A(x) * B(x):");
-  console.log(`[Prover]   A(x) = ${formatPoly(APoly)}`);
-  console.log(`[Prover]   B(x) = ${formatPoly(BPoly)}`);
+  console.log(`\n[Prover] --- Detailed computation of P(x) = A(x)*B(x) - C(x) ---`);
+  console.log(`[Prover] A(x) = ${formatPoly(APoly)}`);
+  console.log(`[Prover] B(x) = ${formatPoly(BPoly)}`);
+  console.log(`[Prover]`);
+  console.log(`[Prover] Multiplying A(x) * B(x) term-by-term (each coeff*coeff contributes to degree i+j):`);
+  console.log(`[Prover] We reduce mod p = ${p} after each accumulation.`);
 
-  const mult = Array(APoly.length + BPoly.length - 1).fill(0);
+  const mult = Array(APoly.length + BPoly.length - 1).fill(0n);
   for (let i = 0; i < APoly.length; i += 1) {
     for (let j = 0; j < BPoly.length; j += 1) {
-      const raw = APoly[i] * BPoly[j];
       const deg = i + j;
       const before = mult[deg];
-      mult[deg] = mod(mult[deg] + raw, p);
+      mult[deg] = mod(mult[deg] + APoly[i] * BPoly[j], p);
       console.log(
-        `[Prover]   term: (${APoly[i]}*x^${i}) * (${BPoly[j]}*x^${j}) = ${raw}*x^${deg}; accumulate coeff[x^${deg}] ${before} -> ${mult[deg]} (mod ${p})`
+        `[Prover]   (${APoly[i]}*x^${i}) * (${BPoly[j]}*x^${j})  →  adds to x^${deg}:  ${before} + (${APoly[i]}*${BPoly[j]} mod p) = ${mult[deg]} mod p`
       );
     }
   }
-  console.log(
-    `[Prover]   Result A(x)B(x) coeffs(low->high): ${JSON.stringify(mult)}`
-  );
-  console.log(
-    `[Prover]   Result A(x)B(x) readable: ${formatPoly(mult)}`
-  );
-  console.log("[Prover] Now subtract C(x) coefficient-by-coefficient:");
-  console.log(`[Prover]   C(x) coeffs(low->high): ${JSON.stringify(CPoly)}`);
+  console.log(`[Prover] A(x)*B(x) coeffs (low->high): [${mult.join(", ")}]`);
+  console.log(`[Prover] A(x)*B(x) readable: ${formatPoly(mult)}`);
 
+  console.log(`\n[Prover] Now subtract C(x) coefficient-by-coefficient:`);
+  console.log(`[Prover] C(x) coeffs (low->high): [${CPoly.join(", ")}]`);
   const len = Math.max(mult.length, CPoly.length);
-  const pCoeffs = Array(len).fill(0);
+  const pCoeffs = Array(len).fill(0n);
   for (let d = 0; d < len; d += 1) {
-    const left = mult[d] || 0;
-    const right = CPoly[d] || 0;
-    const raw = left - right;
-    pCoeffs[d] = mod(raw, p);
+    const left = mult[d] || 0n;
+    const right = CPoly[d] || 0n;
+    pCoeffs[d] = mod(left - right, p);
     console.log(
-      `[Prover]   degree x^${d}: (${left}) - (${right}) = ${raw} -> ${pCoeffs[d]} mod ${p}`
+      `[Prover]   x^${d}: (${left}) - (${right}) mod p = ${pCoeffs[d]}`
     );
   }
-
-  console.log(
-    `[Prover]   Final P(x)=A(x)B(x)-C(x) coeffs(low->high): ${JSON.stringify(
-      pCoeffs
-    )}`
-  );
-  if (pCoeffs[0] === 0) {
-    console.log(
-      "[Prover]   Note: x^0 term is 0 because constant terms cancelled in this witness."
-    );
-  }
+  console.log(`[Prover] P(x) = A(x)*B(x) - C(x) coeffs (low->high): [${pCoeffs.join(", ")}]`);
+  console.log(`[Prover] P(x) readable: ${formatPoly(pCoeffs)}`);
 }
 
-function logDetailedZExplanation(p) {
-  console.log("[Prover] Detailed target polynomial Z(x) explanation:");
-  console.log("[Prover]   Constraint points are x=1,2,3 so Z(x) must vanish there.");
-  console.log("[Prover]   Z(x) = (x-1)(x-2)(x-3)");
-  console.log("[Prover]   (x-1)(x-2) = x^2 - 3x + 2");
-  console.log("[Prover]   (x^2 - 3x + 2)(x-3) = x^3 - 6x^2 + 11x - 6");
-  console.log(
-    `[Prover]   Convert to F_${p}: -6 -> ${mod(-6, p)}, 11 -> ${mod(
-      11,
-      p
-    )}, -6 -> ${mod(-6, p)}`
-  );
-  console.log(
-    `[Prover]   Therefore Z(x) coeffs(low->high) = [${mod(-6, p)},${mod(
-      11,
-      p
-    )},${mod(-6, p)},1]`
-  );
+// Explains the target polynomial Z(x) and why it has the form it does.
+function logDetailedZExplanation(Z, p) {
+  console.log(`\n[Prover] --- Target polynomial Z(x) explained ---`);
+  console.log(`[Prover] Constraint points are x = 1, 2, 3.`);
+  console.log(`[Prover] Z(x) must vanish at each constraint point: Z(1)=Z(2)=Z(3)=0.`);
+  console.log(`[Prover] We construct Z(x) = (x-1)(x-2)(x-3).`);
+  console.log(`[Prover] Step 1: (x-1)(x-2) = x^2 - 3x + 2`);
+  console.log(`[Prover] Step 2: (x^2 - 3x + 2)(x-3) = x^3 - 6x^2 + 11x - 6`);
+  console.log(`[Prover] Step 3: reduce mod p = ${p}:`);
+  console.log(`[Prover]   -6  mod p = ${mod(-6n, p)}`);
+  console.log(`[Prover]   11  mod p = ${mod(11n, p)}`);
+  console.log(`[Prover]   -6  mod p = ${mod(-6n, p)}`);
+  console.log(`[Prover]   1   mod p = 1`);
+  console.log(`[Prover] Z(x) coeffs (low->high): [${Z.join(", ")}]`);
+  console.log(`[Prover] Z(x) readable: ${formatPoly(Z)}`);
+  console.log(`[Prover] Why this matters: if the witness satisfies all constraints,`);
+  console.log(`[Prover]   then P(x) = A(x)*B(x) - C(x) evaluates to 0 at x=1,2,3,`);
+  console.log(`[Prover]   so Z(x) divides P(x) exactly — remainder = 0.`);
+  console.log(`[Prover] An invalid witness will leave a non-zero remainder.`);
 }
 
+// Shows the long division P(x) / Z(x) step-by-step, yielding H(x).
 function detailedPolyDiv(numerator, denominator, p) {
   const num = numerator.slice();
   const den = polyTrim(denominator);
-  const quotient = Array(Math.max(0, num.length - den.length + 1)).fill(0);
+  const quotient = Array(Math.max(0, num.length - den.length + 1)).fill(0n);
 
-  console.log("[Prover] Detailed long division for H(x) = P(x)/Z(x):");
-  console.log(`[Prover]   P(x) coeffs(low->high): ${JSON.stringify(num)}`);
-  console.log(`[Prover]   Z(x) coeffs(low->high): ${JSON.stringify(den)}`);
-  console.log(`[Prover]   P(x) readable: ${formatPoly(num)}`);
-  console.log(`[Prover]   Z(x) readable: ${formatPoly(den)}`);
+  console.log(`\n[Prover] --- Detailed long division: H(x) = P(x) / Z(x) ---`);
+  console.log(`[Prover] P(x) coeffs (low->high): [${num.join(", ")}]`);
+  console.log(`[Prover] Z(x) coeffs (low->high): [${den.join(", ")}]`);
+  console.log(`[Prover] P(x) readable: ${formatPoly(num)}`);
+  console.log(`[Prover] Z(x) readable: ${formatPoly(den)}`);
+  console.log(`[Prover] Method: polynomial long division in F_p.`);
+  console.log(`[Prover]   At each step, cancel the current leading term of the remainder`);
+  console.log(`[Prover]   by computing  scale = leadCoeff(remainder) * modInv(leadCoeff(Z), p)`);
+  console.log(`[Prover]   then subtract scale*x^shift * Z(x) from the remainder.`);
 
   while (polyTrim(num).length - 1 >= den.length - 1) {
     const curDeg = polyTrim(num).length - 1;
@@ -313,41 +326,21 @@ function detailedPolyDiv(numerator, denominator, p) {
     const shift = curDeg - denDeg;
     quotient[shift] = scale;
 
+    console.log(`\n[Prover] Step: cancel x^${curDeg} term`);
     console.log(
-      `[Prover]   Step: cancel degree x^${curDeg} using (${leadNum}/${leadDen})*x^${shift}`
+      `[Prover]   Leading coeff of remainder: ${leadNum}`
     );
     console.log(
-      `[Prover]         in F_${p}: ${leadNum} * inv(${leadDen}) where inv(${leadDen})=${invLeadDen}, so scale=${scale}`
+      `[Prover]   Leading coeff of Z(x):      ${leadDen}`
     );
     console.log(
-      `[Prover]         add ${scale}*x^${shift} to quotient => current H coeffs(low->high): ${JSON.stringify(
-        polyTrim(quotient)
-      )}`
+      `[Prover]   scale = ${leadNum} * modInv(${leadDen}, p) = ${leadNum} * ${invLeadDen} mod p = ${scale}`
     );
-
-    // Human-friendly expansion for the current subtraction step.
-    const rawExpanded = [];
-    const modExpanded = [];
-    for (let i = 0; i <= denDeg; i += 1) {
-      const degree = i + shift;
-      const rawCoeff = scale * den[i];
-      rawExpanded.push({ degree, coeff: rawCoeff });
-      modExpanded.push({ degree, coeff: mod(rawCoeff, p) });
-    }
-    const rawExpandedText = rawExpanded
-      .sort((a, b) => b.degree - a.degree)
-      .map((t) => `${t.coeff}x^${t.degree}`)
-      .join(" + ");
-    const modExpandedText = modExpanded
-      .sort((a, b) => b.degree - a.degree)
-      .map((t) => `${t.coeff}x^${t.degree}`)
-      .join(" + ");
+    console.log(`[Prover]   shift = ${curDeg} - ${denDeg} = ${shift}`);
     console.log(
-      `[Prover]         expanded raw product (${scale}*x^${shift})*Z(x): ${rawExpandedText}`
+      `[Prover]   Add ${scale}*x^${shift} to quotient → H coeffs so far (low->high): [${polyTrim(quotient).join(", ")}]`
     );
-    console.log(
-      `[Prover]         after mod ${p}: ${modExpandedText}`
-    );
+    console.log(`[Prover]   Subtract (${scale}*x^${shift}) * Z(x) from remainder:`);
 
     for (let i = 0; i <= denDeg; i += 1) {
       const idx = i + shift;
@@ -355,110 +348,141 @@ function detailedPolyDiv(numerator, denominator, p) {
       const before = num[idx];
       num[idx] = mod(num[idx] - subTerm, p);
       console.log(
-        `[Prover]         update degree x^${idx}: ${before} - (${scale}*${den[i]}=${subTerm}) -> ${num[idx]} mod ${p}`
+        `[Prover]     x^${idx}: ${before} - (${scale}*${den[i]} mod p = ${subTerm}) → ${num[idx]}`
       );
     }
     console.log(
-      `[Prover]         numerator after step (low->high): ${JSON.stringify(
-        polyTrim(num)
-      )}`
+      `[Prover]   Remainder after step (low->high): [${polyTrim(num).join(", ")}]`
     );
   }
 
   const remainder = polyTrim(num);
-  console.log(
-    `[Prover]   Final H(x) coeffs(low->high): ${JSON.stringify(polyTrim(
-      quotient
-    ))}`
-  );
-  console.log(
-    `[Prover]   Final remainder coeffs(low->high): ${JSON.stringify(remainder)}`
-  );
-  if (remainder.length === 1 && remainder[0] === 0) {
-    console.log("[Prover]   Since remainder is 0, Z(x) divides P(x) exactly.");
-    console.log(
-      `[Prover]   Therefore in QAP form: P(x) = H(x) * Z(x), with H(x) = ${formatPoly(
-        polyTrim(quotient)
-      )}`
-    );
+  console.log(`\n[Prover] Final H(x) coeffs (low->high): [${polyTrim(quotient).join(", ")}]`);
+  console.log(`[Prover] Final H(x) readable: ${formatPoly(polyTrim(quotient))}`);
+  console.log(`[Prover] Remainder (low->high): [${remainder.join(", ")}]`);
+  if (remainder.length === 1 && remainder[0] === 0n) {
+    console.log(`[Prover] Remainder = 0 ✓  Z(x) divides P(x) exactly.`);
+    console.log(`[Prover] QAP form: P(x) = H(x) * Z(x)  holds as a polynomial identity.`);
+  } else {
+    console.log(`[Prover] Remainder ≠ 0 ✗  Witness does not satisfy all constraints.`);
   }
   return { quotient: polyTrim(quotient), remainder };
 }
 
-function logEvaluationHandshake({
-  p,
-  r,
-  APoly,
-  BPoly,
-  CPoly,
-  HPoly,
-  Z,
-  witness,
-  evals,
-}) {
-  const Zr = polyEval(Z, r, p);
-  const lhsRaw = evals.A_r * evals.B_r - evals.C_r;
-  const rhsRaw = evals.H_r * Zr;
-  const lhs = mod(lhsRaw, p);
-  const rhs = mod(rhsRaw, p);
-
-  console.log("[Prover] ===== Evaluation Handshake (Proof Packaging) =====");
-  console.log(
-    `[Prover] We now move from full polynomials to single-point evaluations at secret r=${r}.`
-  );
-  console.log(
-    "[Prover] Why: sending full polynomial coefficients can leak structure; sending evaluations is the proof-style check."
-  );
-  console.log(
-    `[Prover] Public/derived polynomials: A(x)=${formatPoly(APoly)}, B(x)=${formatPoly(
-      BPoly
-    )}, C(x)=${formatPoly(CPoly)}, H(x)=${formatPoly(HPoly)}`
-  );
-  console.log(
-    `[Prover] Evaluate at r=${r}: A(r)=${evals.A_r}, B(r)=${evals.B_r}, C(r)=${evals.C_r}, H(r)=${evals.H_r}`
-  );
-  console.log(
-    `[Prover] Debug note: witness ${JSON.stringify(
-      witness
-    )} is included only for learning/debugging. Real ZK proofs do NOT reveal witness values.`
-  );
-
-  console.log("[Prover] Verifier-side equation that must hold in F_97:");
-  console.log("[Prover]   (A(r) * B(r) - C(r)) == H(r) * Z(r)");
-  console.log(
-    `[Prover]   Z(r) is public-computable from Z(x): Z(${r}) = ${Zr}`
-  );
-  console.log(
-    `[Prover]   LHS raw: (${evals.A_r} * ${evals.B_r}) - ${evals.C_r} = ${lhsRaw}; LHS mod ${p} = ${lhs}`
-  );
-  console.log(
-    `[Prover]   RHS raw: (${evals.H_r} * ${Zr}) = ${rhsRaw}; RHS mod ${p} = ${rhs}`
-  );
-  console.log(
-    `[Prover]   Handshake check value: ${lhs} ${lhs === rhs ? "==" : "!="} ${rhs}`
-  );
-  console.log(
-    "[Prover] If this equality fails, the witness does not satisfy the circuit constraints."
-  );
-  console.log("[Prover] ==================================================");
+// Explains how the commitment is built and what each field contributes.
+function logDetailedCommitment(circuitDigest, APoly, BPoly, CPoly, HPoly, commitment) {
+  console.log(`\n[Prover] ===== Fiat–Shamir Commitment =====`);
+  console.log(`[Prover] A commitment is a hash that:`);
+  console.log(`[Prover]   1. Fixes the polynomials BEFORE the challenge r is derived.`);
+  console.log(`[Prover]      The prover cannot choose r freely; it is determined by this hash.`);
+  console.log(`[Prover]   2. Includes the circuitDigest, binding the proof to the exact circuit.`);
+  console.log(`[Prover]      If the verifier has a different circuit digest in its vk, the`);
+  console.log(`[Prover]      re-derived commitment won't match → proof rejected.`);
+  console.log(`[Prover]`);
+  console.log(`[Prover] Commitment input (JSON-serialised):`);
+  console.log(`[Prover]   circuitDigest: "${circuitDigest}"`);
+  console.log(`[Prover]   A_x: [${APoly.map(String).join(", ")}]`);
+  console.log(`[Prover]   B_x: [${BPoly.map(String).join(", ")}]`);
+  console.log(`[Prover]   C_x: [${CPoly.map(String).join(", ")}]`);
+  console.log(`[Prover]   H_x: [${HPoly.map(String).join(", ")}]`);
+  console.log(`[Prover] commitment = sha256(above) = ${commitment}`);
+  console.log(`[Prover] ============================================`);
 }
 
+// Explains the Fiat–Shamir r derivation step-by-step, including the counter loop.
+function logDetailedChallengeDerivation(commitment, circuitDigest, r, prime, forbiddenPoints) {
+  console.log(`\n[Prover] ===== Fiat–Shamir Challenge Point r =====`);
+  console.log(`[Prover] r is derived deterministically from: sha256(commitment | circuitDigest | counter)`);
+  console.log(`[Prover] Using the full 256-bit hash output as a BigInt before reducing mod p.`);
+  console.log(`[Prover] This minimises modular bias vs truncating to 32 bits (original approach).`);
+  console.log(`[Prover]   Old bias: 2^32 mod 97 / 97 ≈ 1.3%`);
+  console.log(`[Prover]   New bias: 2^256 mod p / p < 2^-195  (negligible)`);
+  console.log(`[Prover] Forbidden points ${JSON.stringify(forbiddenPoints.map(String))} are excluded`);
+  console.log(`[Prover] because Z(x) = 0 at those points — checking the identity there would`);
+  console.log(`[Prover] trivially pass for any H(x) since both sides would be 0.`);
+  console.log(`[Prover]`);
+
+  let counter = 0;
+  while (true) {
+    const toHash = `${commitment}|${circuitDigest}|${counter}`;
+    const hex = sha256Hex(toHash);
+    const num = BigInt("0x" + hex);
+    const candidate = num % prime;
+    const forbidden = forbiddenPoints.includes(candidate);
+    console.log(`[Prover] counter=${counter}: sha256("${toHash.slice(0, 40)}...") = ${hex.slice(0, 16)}...`);
+    console.log(`[Prover]   BigInt(hash) mod p = ${candidate}  →  ${forbidden ? "FORBIDDEN, try next" : "ACCEPTED"}`);
+    if (!forbidden) {
+      console.log(`[Prover] Challenge r = ${r}`);
+      console.log(`[Prover] ============================================`);
+      return;
+    }
+    counter += 1;
+  }
+}
+
+// Explains the QAP identity check at r and previews what the verifier will do.
+function logEvaluationHandshake(APoly, BPoly, CPoly, HPoly, Z, r, p) {
+  const A_r = polyEval(APoly, r, p);
+  const B_r = polyEval(BPoly, r, p);
+  const C_r = polyEval(CPoly, r, p);
+  const H_r = polyEval(HPoly, r, p);
+  const Z_r = polyEval(Z, r, p);
+  const lhs = mod(A_r * B_r - C_r, p);
+  const rhs = mod(H_r * Z_r, p);
+
+  console.log(`\n[Prover] ===== QAP Identity Check at r (Evaluation Handshake) =====`);
+  console.log(`[Prover] The QAP identity  A(x)*B(x) - C(x) = H(x)*Z(x)  holds as a`);
+  console.log(`[Prover] polynomial identity. By Schwartz-Zippel, if this identity holds`);
+  console.log(`[Prover] at a random point r, it holds everywhere with probability 1 - deg/|F|.`);
+  console.log(`[Prover]`);
+  console.log(`[Prover] Evaluating each polynomial at r = ${r}:`);
+  console.log(`[Prover]   A(r): evaluate [${APoly.join(",")}] at r=${r}  =  ${A_r}`);
+  console.log(`[Prover]   B(r): evaluate [${BPoly.join(",")}] at r=${r}  =  ${B_r}`);
+  console.log(`[Prover]   C(r): evaluate [${CPoly.join(",")}] at r=${r}  =  ${C_r}`);
+  console.log(`[Prover]   H(r): evaluate [${HPoly.join(",")}] at r=${r}  =  ${H_r}`);
+  console.log(`[Prover]   Z(r): evaluate [${Z.join(",")}] at r=${r}      =  ${Z_r}`);
+  console.log(`[Prover]         (Z(r) can be computed by anyone from the public verification key.)`);
+  console.log(`[Prover]`);
+  console.log(`[Prover] LHS = A(r)*B(r) - C(r)  =  ${A_r} * ${B_r} - ${C_r}  mod p  =  ${lhs}`);
+  console.log(`[Prover] RHS = H(r)*Z(r)          =  ${H_r} * ${Z_r}            mod p  =  ${rhs}`);
+  console.log(`[Prover] LHS ${lhs === rhs ? "==" : "!="} RHS  →  ${lhs === rhs ? "MATCH ✓" : "MISMATCH ✗"}`);
+  console.log(`[Prover]`);
+  console.log(`[Prover] What the verifier will do (without knowing the witness):`);
+  console.log(`[Prover]   1. Verify the commitment matches sha256(circuitDigest || poly coefficients).`);
+  console.log(`[Prover]      This ensures the evaluations are tied to the committed polynomials,`);
+  console.log(`[Prover]      preventing a prover from fabricating evaluations after seeing r.`);
+  console.log(`[Prover]   2. Re-derive r from the verified commitment.`);
+  console.log(`[Prover]   3. Re-evaluate A(r), B(r), C(r), H(r) from the proof's poly coefficients.`);
+  console.log(`[Prover]      (NOT trusting prover-supplied evaluation values.)`);
+  console.log(`[Prover]   4. Compute Z(r) from the public verification key.`);
+  console.log(`[Prover]   5. Check A(r)*B(r) - C(r) == H(r)*Z(r).`);
+  console.log(`[Prover] ============================================`);
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
 function main() {
-  const requirements = JSON.parse(fs.readFileSync("requirements.json", "utf8"));
-  const p = requirements.prime;
-  const points = requirements.constraintPoints;
-  const { A, B, C } = requirements.r1cs;
-  const Z = requirements.targetPolynomial.coeffsLowToHighDegree;
+  const pk = JSON.parse(fs.readFileSync("proving_key.json", "utf8"));
+  const p = BigInt(pk.prime);
+  const points = pk.constraintPoints.map(BigInt);
+  const Z = pk.targetPolynomial.coeffsLowToHighDegree.map(BigInt);
+  const A = pk.r1cs.A.map((row) => row.map(BigInt));
+  const B = pk.r1cs.B.map((row) => row.map(BigInt));
+  const C = pk.r1cs.C.map((row) => row.map(BigInt));
+  const { circuitDigest } = pk;
 
   const ageRaw = process.argv[2];
   const age = ageRaw === undefined ? 2 : Number(ageRaw);
 
   console.log("========== PROVER START ==========");
-  console.log("[Prover] Reading requirements.json");
-  console.log(`[Prover] Field prime: ${p}`);
-  console.log(`[Prover] Constraint points: ${JSON.stringify(points)}`);
+  console.log(`\n[Prover] Reading proving_key.json`);
+  console.log(`[Prover] Field prime p = ${p}  (2^61 - 1)`);
+  console.log(`[Prover] Constraint points: [${points.join(", ")}]`);
+  console.log(`[Prover] Circuit digest: ${circuitDigest}`);
   console.log(
-    `[Prover] Input age from CLI: ${ageRaw === undefined ? "(not provided, default=2)" : ageRaw}`
+    `[Prover] Input age from CLI: ${ageRaw === undefined ? "(not provided, defaulting to 2)" : ageRaw}`
   );
 
   if (!Number.isInteger(age) || age < 0 || age > 3) {
@@ -466,175 +490,151 @@ function main() {
   }
 
   const [b0, b1] = toBits2(age);
-  const witness = [1, age, b0, b1];
-  console.log(
-    `[Prover] Derived 2-bit decomposition: age=${age} -> b0=${b0}, b1=${b1}`
-  );
-  console.log(`[Prover] Witness vector: ${JSON.stringify(witness)}`);
+  // The witness is private — it will NOT be written to proof.json.
+  const witness = [1n, BigInt(age), b0, b1];
+  console.log(`\n[Prover] ===== Witness Construction =====`);
+  console.log(`[Prover] Witness w = [1, age, b0, b1]  (PRIVATE — not written to proof.json)`);
+  console.log(`[Prover] age = ${age}`);
+  console.log(`[Prover] 2-bit decomposition: ${age} in binary = b1 b0 = ${b1} ${b0}`);
+  console.log(`[Prover]   b0 = age & 1            = ${b0}  (least-significant bit)`);
+  console.log(`[Prover]   b1 = (age >> 1) & 1     = ${b1}  (most-significant bit)`);
+  console.log(`[Prover]   Verify: b0 + 2*b1 = ${b0} + 2*${b1} = ${b0 + 2n * b1}  (should equal age=${age})`);
+  console.log(`[Prover] w = [${witness.join(", ")}]`);
+  console.log(`[Prover] ============================================`);
 
-  const aVals = A.map((row) => dot(row, witness, p));
-  const bVals = B.map((row) => dot(row, witness, p));
-  const cVals = C.map((row) => dot(row, witness, p));
-  console.log(`[Prover] A-values at constraints: ${JSON.stringify(aVals)}`);
-  console.log(`[Prover] B-values at constraints: ${JSON.stringify(bVals)}`);
-  console.log(`[Prover] C-values at constraints: ${JSON.stringify(cVals)}`);
-  console.log("[Prover] How these are computed (row dot witness) in R1CS:");
-  A.forEach((row, i) => {
-    console.log(
-      `[Prover]   A row ${i + 1}: ${JSON.stringify(row)} dot ${JSON.stringify(
-        witness
-      )} = ${aVals[i]}`
-    );
+  // -------------------------------------------------------------------------
+  // R1CS evaluation
+  // -------------------------------------------------------------------------
+  console.log(`\n[Prover] ===== R1CS Evaluation =====`);
+  console.log(`[Prover] For each constraint i, compute (A_i·w), (B_i·w), (C_i·w)`);
+  console.log(`[Prover] These are the values the polynomials A(x),B(x),C(x) must take at x=i+1.`);
+  console.log(`[Prover]`);
+
+  const aVals = A.map((row, i) => {
+    const v = dot(row, witness, p);
+    console.log(`[Prover] A row ${i + 1}: ${JSON.stringify(row.map(String))} · [${witness.join(",")}] = ${v}  (at x=${points[i]})`);
+    return v;
   });
-  B.forEach((row, i) => {
-    console.log(
-      `[Prover]   B row ${i + 1}: ${JSON.stringify(row)} dot ${JSON.stringify(
-        witness
-      )} = ${bVals[i]}`
-    );
+  console.log(`[Prover]`);
+  const bVals = B.map((row, i) => {
+    const v = dot(row, witness, p);
+    console.log(`[Prover] B row ${i + 1}: ${JSON.stringify(row.map(String))} · [${witness.join(",")}] = ${v}  (at x=${points[i]})`);
+    return v;
   });
-  C.forEach((row, i) => {
-    console.log(
-      `[Prover]   C row ${i + 1}: ${JSON.stringify(row)} dot ${JSON.stringify(
-        witness
-      )} = ${cVals[i]}`
-    );
+  console.log(`[Prover]`);
+  const cVals = C.map((row, i) => {
+    const v = dot(row, witness, p);
+    console.log(`[Prover] C row ${i + 1}: ${JSON.stringify(row.map(String))} · [${witness.join(",")}] = ${v}  (at x=${points[i]})`);
+    return v;
   });
-  console.log(
-    "[Prover] Interpolation idea: build one polynomial that matches each list at x=1,2,3."
-  );
-  console.log(
-    `[Prover]   A(1)=${aVals[0]}, A(2)=${aVals[1]}, A(3)=${aVals[2]}`
-  );
-  console.log(
-    `[Prover]   B(1)=${bVals[0]}, B(2)=${bVals[1]}, B(3)=${bVals[2]}`
-  );
-  console.log(
-    `[Prover]   C(1)=${cVals[0]}, C(2)=${cVals[1]}, C(3)=${cVals[2]}`
-  );
-  logDetailedLagrangeForLabel("A", aVals, p);
-  logDetailedLagrangeForLabel("B", bVals, p);
-  logDetailedLagrangeForLabel("C", cVals, p);
+  console.log(`[Prover]`);
+  console.log(`[Prover] Summary — values that must be interpolated:`);
+  console.log(`[Prover]   A(1)=${aVals[0]}, A(2)=${aVals[1]}, A(3)=${aVals[2]}`);
+  console.log(`[Prover]   B(1)=${bVals[0]}, B(2)=${bVals[1]}, B(3)=${bVals[2]}`);
+  console.log(`[Prover]   C(1)=${cVals[0]}, C(2)=${cVals[1]}, C(3)=${cVals[2]}`);
+  console.log(`[Prover] Constraint check at each point:`);
+  for (let i = 0; i < 3; i++) {
+    const lhs = mod(aVals[i] * bVals[i], p);
+    const rhs = cVals[i];
+    console.log(`[Prover]   x=${points[i]}: A*B = ${aVals[i]}*${bVals[i]} mod p = ${lhs},  C = ${rhs}  →  ${lhs === rhs ? "✓" : "✗"}`);
+  }
+  console.log(`[Prover] ============================================`);
+
+  // -------------------------------------------------------------------------
+  // Lagrange interpolation
+  // -------------------------------------------------------------------------
+  console.log(`\n[Prover] ===== Lagrange Interpolation =====`);
+  console.log(`[Prover] Build degree-≤2 polynomials A(x), B(x), C(x) that pass through the`);
+  console.log(`[Prover] R1CS values at constraint points.`);
+
+  logDetailedLagrangeForLabel("A", points, aVals, p);
+  logDetailedLagrangeForLabel("B", points, bVals, p);
+  logDetailedLagrangeForLabel("C", points, cVals, p);
 
   const APoly = lagrangeInterpolate(points, aVals, p);
   const BPoly = lagrangeInterpolate(points, bVals, p);
   const CPoly = lagrangeInterpolate(points, cVals, p);
-  console.log(
-    `[Prover] Interpolated A(x) coeffs (low->high): ${JSON.stringify(APoly)}`
-  );
-  console.log(
-    `[Prover] Interpolated B(x) coeffs (low->high): ${JSON.stringify(BPoly)}`
-  );
-  console.log(
-    `[Prover] Interpolated C(x) coeffs (low->high): ${JSON.stringify(CPoly)}`
-  );
-  console.log(`[Prover] A(x) readable form in F_${p}: ${formatPoly(APoly)}`);
-  console.log(`[Prover] B(x) readable form in F_${p}: ${formatPoly(BPoly)}`);
-  console.log(`[Prover] C(x) readable form in F_${p}: ${formatPoly(CPoly)}`);
-  console.log(
-    "[Prover] Check: each polynomial above, when evaluated at x=1,2,3, gives the corresponding values list."
-  );
+
+  // -------------------------------------------------------------------------
+  // P(x) = A(x)*B(x) - C(x)
+  // -------------------------------------------------------------------------
+  console.log(`\n[Prover] ===== Computing P(x) = A(x)*B(x) - C(x) =====`);
   logDetailedPComputation(APoly, BPoly, CPoly, p);
-  logDetailedZExplanation(p);
 
-  const P = polySub(polyMul(APoly, BPoly, p), CPoly, p); // A*B - C
+  // -------------------------------------------------------------------------
+  // Z(x) explanation and H(x) = P(x)/Z(x)
+  // -------------------------------------------------------------------------
+  logDetailedZExplanation(Z, p);
+
+  const P = polySub(polyMul(APoly, BPoly, p), CPoly, p);
   const { quotient: HPoly, remainder } = detailedPolyDiv(P, Z, p);
-  console.log(
-    `[Prover] Computed P(x)=A(x)B(x)-C(x) coeffs (low->high): ${JSON.stringify(P)}`
-  );
-  console.log(
-    `[Prover] Target Z(x) coeffs (low->high): ${JSON.stringify(Z)}`
-  );
-  console.log(
-    `[Prover] Quotient H(x) coeffs (low->high): ${JSON.stringify(HPoly)}`
-  );
-  console.log(
-    `[Prover] Division remainder coeffs (must be [0]): ${JSON.stringify(
-      remainder
-    )}`
-  );
 
-  if (!(remainder.length === 1 && remainder[0] === 0)) {
-    throw new Error("Remainder is non-zero: witness does not satisfy constraints.");
+  if (!(remainder.length === 1 && remainder[0] === 0n)) {
+    throw new Error("Remainder is non-zero: witness does not satisfy the constraints.");
   }
 
-  // Fiat–Shamir "challenge": r is derived from the prover's polynomial commitment (hash),
-  // plus public parameters, so the prover can't freely choose r after seeing the verifier.
-  const commitment = sha256Hex(
-    JSON.stringify({
-      A_x: APoly,
-      B_x: BPoly,
-      C_x: CPoly,
-      H_x: HPoly,
-    })
-  );
-  const publicSeed = JSON.stringify({
-    prime: p,
-    constraintPoints: points,
-    targetZCoeffsLowToHighDegree: Z,
+  // -------------------------------------------------------------------------
+  // Fiat–Shamir commitment
+  // -------------------------------------------------------------------------
+  const commitInput = JSON.stringify({
+    circuitDigest,
+    A_x: APoly.map(String),
+    B_x: BPoly.map(String),
+    C_x: CPoly.map(String),
+    H_x: HPoly.map(String),
   });
+  const commitment = sha256Hex(commitInput);
+  logDetailedCommitment(circuitDigest, APoly, BPoly, CPoly, HPoly, commitment);
 
-  const forbiddenPoints = [1, 2, 3];
-  const secretPoint = deriveChallengeR({
-    commitment,
-    prime: p,
-    publicSeed,
-    forbiddenPoints,
-  });
+  // -------------------------------------------------------------------------
+  // Fiat–Shamir challenge r
+  // -------------------------------------------------------------------------
+  const forbiddenPoints = points; // exclude constraint points {1,2,3}
+  const r = deriveChallengeR({ commitment, circuitDigest, prime: p, forbiddenPoints });
+  logDetailedChallengeDerivation(commitment, circuitDigest, r, p, forbiddenPoints);
 
-  console.log(
-    `[Prover] Derived Fiat–Shamir challenge point r=${secretPoint} from commitment.`
-  );
-  const payload = {
-    prime: p,
+  // -------------------------------------------------------------------------
+  // QAP identity preview
+  // -------------------------------------------------------------------------
+  logEvaluationHandshake(APoly, BPoly, CPoly, HPoly, Z, r, p);
+
+  // -------------------------------------------------------------------------
+  // Build proof
+  //
+  // Contains: commitment + polynomial coefficients (commitment opening).
+  // Omits:    witness (private)
+  //           pre-computed evaluations (verifier recomputes them from the
+  //           committed coefficients, preventing fabricated evaluations)
+  //
+  // NOTE ON ZK: polynomial coefficients are a deterministic function of the
+  // witness, so they do encode it. True ZK requires replacing this hash-based
+  // commitment with an EC polynomial commitment (e.g. KZG) where the verifier
+  // can verify evaluations without seeing the coefficients. That requires
+  // elliptic curve pairings and is beyond the scope of this demo.
+  // -------------------------------------------------------------------------
+  const proof = {
     commitment,
-    witness: {
-      layout: requirements.witnessLayout,
-      values: witness,
-    },
-    polynomialEvaluationsAtSecretPoint: {
-      A_r: polyEval(APoly, secretPoint, p),
-      B_r: polyEval(BPoly, secretPoint, p),
-      C_r: polyEval(CPoly, secretPoint, p),
-      H_r: polyEval(HPoly, secretPoint, p),
-    },
-    polynomialsLowToHighDegree: {
-      A_x: APoly,
-      B_x: BPoly,
-      C_x: CPoly,
-      H_x: HPoly,
+    polynomialCoefficients: {
+      A_x: APoly.map(String),
+      B_x: BPoly.map(String),
+      C_x: CPoly.map(String),
+      H_x: HPoly.map(String),
     },
   };
-  logEvaluationHandshake({
-    p,
-    r: secretPoint,
-    APoly,
-    BPoly,
-    CPoly,
-    HPoly,
-    Z,
-    witness,
-    evals: payload.polynomialEvaluationsAtSecretPoint,
-  });
-  console.log(
-    `[Prover] Evaluations at r: ${JSON.stringify(
-      payload.polynomialEvaluationsAtSecretPoint
-    )}`
-  );
 
-  console.log(
-    `Prover is sending [witness.values=${JSON.stringify(
-      payload.witness.values
-    )}] to proof.json`
-  );
-  console.log(
-    `Prover is sending [A(r), B(r), C(r), H(r)=${JSON.stringify(
-      payload.polynomialEvaluationsAtSecretPoint
-    )}] to proof.json`
-  );
+  fs.writeFileSync("proof.json", JSON.stringify(proof, null, 2), "utf8");
 
-  fs.writeFileSync("proof.json", JSON.stringify(payload, null, 2), "utf8");
-  console.log("proof.json generated successfully.");
+  console.log(`\n[Prover] ===== Proof Written =====`);
+  console.log(`[Prover] proof.json contains:`);
+  console.log(`[Prover]   commitment           : ${commitment}`);
+  console.log(`[Prover]   polynomialCoefficients:`);
+  console.log(`[Prover]     A_x: [${APoly.map(String).join(", ")}]`);
+  console.log(`[Prover]     B_x: [${BPoly.map(String).join(", ")}]`);
+  console.log(`[Prover]     C_x: [${CPoly.map(String).join(", ")}]`);
+  console.log(`[Prover]     H_x: [${HPoly.map(String).join(", ")}]`);
+  console.log(`[Prover] Notably ABSENT from proof.json:`);
+  console.log(`[Prover]   - witness values (private)`);
+  console.log(`[Prover]   - pre-computed evaluations A(r),B(r),C(r),H(r) (verifier recomputes these)`);
   console.log("=========== PROVER END ===========");
 }
 

@@ -1,0 +1,19 @@
+{
+  "prime": "2305843009213693951",
+  "constraintPoints": [
+    "1",
+    "2",
+    "3"
+  ],
+  "targetPolynomial": {
+    "name": "Z(x)",
+    "coeffsLowToHighDegree": [
+      "2305843009213693945",
+      "11",
+      "2305843009213693945",
+      "1"
+    ],
+    "display": "(x-1)(x-2)(x-3)"
+  },
+  "circuitDigest": "e326410f04039a88f04a5edb10933cf4da76d971439f3d4e49ea9a770afc84d1"
+}
