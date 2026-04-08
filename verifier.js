@@ -188,8 +188,12 @@ function main() {
 
   console.log("========= VERIFIER START =========");
   console.log(`\n[Verifier] Reading verification_key.json and proof.json`);
+  const { lo, hi } = vk.range;
+  console.log(`[Verifier]`);
+  console.log(`[Verifier] *** Claim being verified: ${lo} ≤ age ≤ ${hi} ***`);
+  console.log(`[Verifier]`);
   console.log(`[Verifier] The verifier has access to ONLY:`);
-  console.log(`[Verifier]   verification_key.json: prime, Z(x) coefficients, circuitDigest`);
+  console.log(`[Verifier]   verification_key.json: prime, range [${lo},${hi}], Z(x) coefficients, circuitDigest`);
   console.log(`[Verifier]   proof.json:            commitment, polynomial coefficients`);
   console.log(`[Verifier] It does NOT have: proving key, R1CS matrices, or witness values.`);
 
@@ -276,9 +280,9 @@ function main() {
 
   console.log(`\n`);
   if (passed) {
-    console.log("Verification SUCCESS: A(r)*B(r) - C(r) == H(r)*Z(r)");
+    console.log(`Verification SUCCESS: age is in [${lo}, ${hi}]  (QAP identity holds)`);
   } else {
-    console.log("Verification FAILED: QAP identity does not hold.");
+    console.log(`Verification FAILED: QAP identity does not hold.`);
   }
   console.log("========== VERIFIER END ==========");
 }
