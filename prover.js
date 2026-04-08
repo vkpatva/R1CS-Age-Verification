@@ -370,17 +370,22 @@ function detailedPolyDiv(numerator, denominator, p) {
 }
 
 // Explains how the commitment is built and what each field contributes.
-function logDetailedCommitment(circuitDigest, APoly, BPoly, CPoly, HPoly, commitment) {
+function logDetailedCommitment(circuitDigest, salt, APoly, BPoly, CPoly, HPoly, commitment) {
   console.log(`\n[Prover] ===== Fiat–Shamir Commitment =====`);
   console.log(`[Prover] A commitment is a hash that:`);
   console.log(`[Prover]   1. Fixes the polynomials BEFORE the challenge r is derived.`);
   console.log(`[Prover]      The prover cannot choose r freely; it is determined by this hash.`);
-  console.log(`[Prover]   2. Includes the circuitDigest, binding the proof to the exact circuit.`);
+  console.log(`[Prover]   2. Includes a fresh random salt so every proof run produces a`);
+  console.log(`[Prover]      unique commitment, even for the same witness. Without this, an`);
+  console.log(`[Prover]      adversary could precompute the 4 possible proofs (age 0-3) and`);
+  console.log(`[Prover]      match against the submitted proof to learn the exact age.`);
+  console.log(`[Prover]   3. Includes the circuitDigest, binding the proof to the exact circuit.`);
   console.log(`[Prover]      If the verifier has a different circuit digest in its vk, the`);
   console.log(`[Prover]      re-derived commitment won't match → proof rejected.`);
   console.log(`[Prover]`);
   console.log(`[Prover] Commitment input (JSON-serialised):`);
   console.log(`[Prover]   circuitDigest: "${circuitDigest}"`);
+  console.log(`[Prover]   salt: "${salt}"  (freshly generated for this proof run)`);
   console.log(`[Prover]   A_x: [${APoly.map(String).join(", ")}]`);
   console.log(`[Prover]   B_x: [${BPoly.map(String).join(", ")}]`);
   console.log(`[Prover]   C_x: [${CPoly.map(String).join(", ")}]`);
@@ -576,15 +581,21 @@ function main() {
   // -------------------------------------------------------------------------
   // Fiat–Shamir commitment
   // -------------------------------------------------------------------------
+  // Generate a fresh random salt so every proof run produces a unique commitment,
+  // even for the same witness.  Without this, an adversary could precompute the
+  // 4 possible proofs (age 0-3) and match against the submitted proof to learn age.
+  const salt = crypto.randomBytes(32).toString("hex");
+
   const commitInput = JSON.stringify({
     circuitDigest,
+    salt,
     A_x: APoly.map(String),
     B_x: BPoly.map(String),
     C_x: CPoly.map(String),
     H_x: HPoly.map(String),
   });
   const commitment = sha256Hex(commitInput);
-  logDetailedCommitment(circuitDigest, APoly, BPoly, CPoly, HPoly, commitment);
+  logDetailedCommitment(circuitDigest, salt, APoly, BPoly, CPoly, HPoly, commitment);
 
   // -------------------------------------------------------------------------
   // Fiat–Shamir challenge r
@@ -614,6 +625,7 @@ function main() {
   // -------------------------------------------------------------------------
   const proof = {
     commitment,
+    salt,
     polynomialCoefficients: {
       A_x: APoly.map(String),
       B_x: BPoly.map(String),

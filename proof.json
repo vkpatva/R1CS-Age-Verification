@@ -1,5 +1,6 @@
 {
-  "commitment": "d1eb46a9c267f0fecb937404055ca2038ff6c1151b3ee5a83094e1fa580bd9bb",
+  "commitment": "a2fd2e6085131ce718ca785ca4893411a5b8cede1e625d773f2978d719b0c36a",
+  "salt": "4c7ce1a06a8bd9532f38689d87cb542d754202bad16619d1456ff32fb0d7b1d4",
   "polynomialCoefficients": {
     "A_x": [
       "2305843009213693950",

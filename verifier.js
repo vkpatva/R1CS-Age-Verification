@@ -78,8 +78,9 @@ function logDetailedCommitmentCheck(proof, circuitDigest, expectedCommitment) {
   console.log(`[Verifier]   The fix: verifier recomputes evaluations from the committed coefficients.`);
   console.log(`[Verifier]   A forged evaluation is impossible — the verifier never uses the prover's values.`);
   console.log(`[Verifier]`);
-  console.log(`[Verifier] Recomputing commitment = sha256(JSON({circuitDigest, A_x, B_x, C_x, H_x})):`);
+  console.log(`[Verifier] Recomputing commitment = sha256(JSON({circuitDigest, salt, A_x, B_x, C_x, H_x})):`);
   console.log(`[Verifier]   circuitDigest: "${circuitDigest}"`);
+  console.log(`[Verifier]   salt: "${proof.salt}"  (from proof.json — bound into the commitment)`);
   console.log(`[Verifier]   A_x: [${proof.polynomialCoefficients.A_x.join(", ")}]`);
   console.log(`[Verifier]   B_x: [${proof.polynomialCoefficients.B_x.join(", ")}]`);
   console.log(`[Verifier]   C_x: [${proof.polynomialCoefficients.C_x.join(", ")}]`);
@@ -220,6 +221,7 @@ function main() {
   // -------------------------------------------------------------------------
   const expectedCommitInput = JSON.stringify({
     circuitDigest,
+    salt: proof.salt,
     A_x: proof.polynomialCoefficients.A_x,
     B_x: proof.polynomialCoefficients.B_x,
     C_x: proof.polynomialCoefficients.C_x,
