@@ -12,44 +12,60 @@ const crypto = require("crypto");
 //   - Safety: all intermediate products a*b where a,b < p fit in a BigInt
 //     without overflow (JS BigInt has arbitrary precision).
 const PRIME = 2305843009213693951n; // 2^61 - 1
-const CONSTRAINT_POINTS = [1n, 2n, 3n];
+const CONSTRAINT_POINTS = [1n, 2n, 3n, 4n, 5n];
 
 // R1CS matrices — small integer entries, stored as plain Numbers in JSON.
-// Witness layout: [1, age, b0, b1]
+// Witness layout: [1, age, b0, b1, b2, b3]
 //
 // Each constraint has the form  (A_i · w) * (B_i · w) = (C_i · w)
 // where · is the dot product and w is the witness vector.
 //
 // Constraint 1: b0 * (b0 - 1) = 0
-//   A row: picks b0        → [0, 0, 1, 0]
-//   B row: picks (b0 - 1)  → [-1, 0, 1, 0]  (i.e. -1*constant + 1*b0)
-//   C row: equals 0        → [0, 0, 0, 0]
+//   A row: picks b0        → [0, 0, 1, 0, 0, 0]
+//   B row: picks (b0 - 1)  → [-1, 0, 1, 0, 0, 0]
+//   C row: equals 0        → [0, 0, 0, 0, 0, 0]
 //
 // Constraint 2: b1 * (b1 - 1) = 0
-//   A row: picks b1        → [0, 0, 0, 1]
-//   B row: picks (b1 - 1)  → [-1, 0, 0, 1]
-//   C row: equals 0        → [0, 0, 0, 0]
+//   A row: picks b1        → [0, 0, 0, 1, 0, 0]
+//   B row: picks (b1 - 1)  → [-1, 0, 0, 1, 0, 0]
+//   C row: equals 0        → [0, 0, 0, 0, 0, 0]
 //
-// Constraint 3: age * 1 = b0 + 2*b1
-//   A row: picks age       → [0, 1, 0, 0]
-//   B row: picks 1         → [1, 0, 0, 0]
-//   C row: picks b0+2*b1   → [0, 0, 1, 2]
+// Constraint 3: b2 * (b2 - 1) = 0
+//   A row: picks b2        → [0, 0, 0, 0, 1, 0]
+//   B row: picks (b2 - 1)  → [-1, 0, 0, 0, 1, 0]
+//   C row: equals 0        → [0, 0, 0, 0, 0, 0]
+//
+// Constraint 4: b3 * (b3 - 1) = 0
+//   A row: picks b3        → [0, 0, 0, 0, 0, 1]
+//   B row: picks (b3 - 1)  → [-1, 0, 0, 0, 0, 1]
+//   C row: equals 0        → [0, 0, 0, 0, 0, 0]
+//
+// Constraint 5: age * 1 = b0 + 2*b1 + 4*b2 + 8*b3
+//   A row: picks age              → [0, 1, 0, 0, 0, 0]
+//   B row: picks 1                → [1, 0, 0, 0, 0, 0]
+//   C row: picks b0+2*b1+4*b2+8*b3 → [0, 0, 1, 2, 4, 8]
 const A = [
-  [0, 0, 1, 0],
-  [0, 0, 0, 1],
-  [0, 1, 0, 0],
+  [0, 0, 1, 0, 0, 0],
+  [0, 0, 0, 1, 0, 0],
+  [0, 0, 0, 0, 1, 0],
+  [0, 0, 0, 0, 0, 1],
+  [0, 1, 0, 0, 0, 0],
 ];
 
 const B = [
-  [-1, 0, 1, 0],
-  [-1, 0, 0, 1],
-  [1, 0, 0, 0],
+  [-1, 0, 1, 0, 0, 0],
+  [-1, 0, 0, 1, 0, 0],
+  [-1, 0, 0, 0, 1, 0],
+  [-1, 0, 0, 0, 0, 1],
+  [1, 0, 0, 0, 0, 0],
 ];
 
 const C = [
-  [0, 0, 0, 0],
-  [0, 0, 0, 0],
-  [0, 0, 1, 2],
+  [0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0],
+  [0, 0, 0, 0, 0, 0],
+  [0, 0, 1, 2, 4, 8],
 ];
 
 function mod(n, p) {
@@ -122,18 +138,20 @@ const circuitDigest = sha256Hex(circuitData);
 // -------------------------------------------------------------------------
 const provingKey = {
   prime: PRIME.toString(),
-  witnessLayout: ["1", "age", "b0", "b1"],
+  witnessLayout: ["1", "age", "b0", "b1", "b2", "b3"],
   constraintsDescription: [
     "b0 * (b0 - 1) = 0",
     "b1 * (b1 - 1) = 0",
-    "age * 1 = b0 + 2*b1",
+    "b2 * (b2 - 1) = 0",
+    "b3 * (b3 - 1) = 0",
+    "age * 1 = b0 + 2*b1 + 4*b2 + 8*b3",
   ],
   constraintPoints: CONSTRAINT_POINTS.map(String),
   r1cs: { A, B, C },
   targetPolynomial: {
     name: "Z(x)",
     coeffsLowToHighDegree: Z.map(String),
-    display: "(x-1)(x-2)(x-3)",
+    display: "(x-1)(x-2)(x-3)(x-4)(x-5)",
   },
   circuitDigest,
 };
@@ -144,7 +162,7 @@ const verificationKey = {
   targetPolynomial: {
     name: "Z(x)",
     coeffsLowToHighDegree: Z.map(String),
-    display: "(x-1)(x-2)(x-3)",
+    display: "(x-1)(x-2)(x-3)(x-4)(x-5)",
   },
   circuitDigest,
 };
@@ -163,16 +181,20 @@ console.log(`[Setup]   With F_(2^61-1):      error ≈ 4/2^61 ≈ 2^-59 — negl
 console.log(`[Setup] All arithmetic uses JS BigInt so intermediate products never overflow.`);
 
 console.log("\n[Setup] ===== Witness & Constraints =====");
-console.log(`[Setup] Witness layout: w = [1, age, b0, b1]`);
+console.log(`[Setup] Witness layout: w = [1, age, b0, b1, b2, b3]`);
 console.log(`[Setup]   Index 0: constant 1 (allows encoding constants in linear combinations)`);
-console.log(`[Setup]   Index 1: age       (the secret value we are proving is in [0,3])`);
-console.log(`[Setup]   Index 2: b0        (least-significant bit of age)`);
-console.log(`[Setup]   Index 3: b1        (most-significant bit of age)`);
+console.log(`[Setup]   Index 1: age       (the secret value we are proving is in [0,15])`);
+console.log(`[Setup]   Index 2: b0        (bit 0, weight 1)`);
+console.log(`[Setup]   Index 3: b1        (bit 1, weight 2)`);
+console.log(`[Setup]   Index 4: b2        (bit 2, weight 4)`);
+console.log(`[Setup]   Index 5: b3        (bit 3, weight 8)`);
 console.log(`[Setup] Constraints:`);
-console.log(`[Setup]   1. b0 * (b0 - 1) = 0   — forces b0 ∈ {0, 1} (boolean bit)`);
-console.log(`[Setup]   2. b1 * (b1 - 1) = 0   — forces b1 ∈ {0, 1} (boolean bit)`);
-console.log(`[Setup]   3. age * 1 = b0 + 2*b1 — forces age = b0 + 2*b1 (binary decomposition)`);
-console.log(`[Setup] Together these imply: age ∈ {0, 1, 2, 3}`);
+console.log(`[Setup]   1. b0 * (b0 - 1) = 0                    — forces b0 ∈ {0, 1} (boolean bit)`);
+console.log(`[Setup]   2. b1 * (b1 - 1) = 0                    — forces b1 ∈ {0, 1} (boolean bit)`);
+console.log(`[Setup]   3. b2 * (b2 - 1) = 0                    — forces b2 ∈ {0, 1} (boolean bit)`);
+console.log(`[Setup]   4. b3 * (b3 - 1) = 0                    — forces b3 ∈ {0, 1} (boolean bit)`);
+console.log(`[Setup]   5. age * 1 = b0 + 2*b1 + 4*b2 + 8*b3  — 4-bit binary decomposition`);
+console.log(`[Setup] Together these imply: age ∈ {0, 1, ..., 15}`);
 
 console.log("\n[Setup] ===== R1CS Matrices =====");
 console.log(`[Setup] R1CS encodes each constraint i as: (A_i·w) * (B_i·w) = (C_i·w)`);
@@ -184,24 +206,16 @@ console.log(`[Setup] Matrix C (result):`);
 C.forEach((row, i) => console.log(`[Setup]   row ${i + 1}: ${JSON.stringify(row)}`));
 
 console.log("\n[Setup] ===== Target Polynomial Z(x) =====");
-console.log(`[Setup] Constraints are evaluated at points x = 1, 2, 3.`);
+console.log(`[Setup] Constraints are evaluated at points x = 1, 2, 3, 4, 5.`);
 console.log(`[Setup] Z(x) must equal zero at each constraint point so that`);
 console.log(`[Setup] the QAP divisibility check  P(x) = H(x)*Z(x)  makes sense.`);
-console.log(`[Setup] Z(x) = (x-1)(x-2)(x-3)`);
-console.log(`[Setup] Step 1: (x-1)(x-2) = x^2 - 3x + 2`);
-console.log(`[Setup] Step 2: (x^2 - 3x + 2)(x-3) = x^3 - 6x^2 + 11x - 6`);
-console.log(`[Setup] Step 3: reduce coefficients mod p = ${PRIME}:`);
-console.log(`[Setup]   -6  mod p = ${mod(-6n, PRIME)}`);
-console.log(`[Setup]   11  mod p = ${mod(11n, PRIME)}`);
-console.log(`[Setup]   -6  mod p = ${mod(-6n, PRIME)}`);
-console.log(`[Setup]   1   mod p = 1`);
+console.log(`[Setup] Z(x) = (x-1)(x-2)(x-3)(x-4)(x-5)`);
 console.log(`[Setup] Z(x) coefficients (low->high): [${Z.map(String).join(", ")}]`);
-console.log(`[Setup] Verify Z(1) = ${Z[0]}+${Z[1]}+${Z[2]}+${Z[3]} mod p = ${mod(Z[0]+Z[1]+Z[2]+Z[3], PRIME)} (expected 0)`);
-console.log(`[Setup] Verify Z(2) = evaluate at 2 ...`);
-const Z2 = mod(Z[0] + Z[1]*2n + Z[2]*4n + Z[3]*8n, PRIME);
-console.log(`[Setup]   ${Z[0]} + ${Z[1]}*2 + ${Z[2]}*4 + ${Z[3]}*8 mod p = ${Z2} (expected 0)`);
-const Z3 = mod(Z[0] + Z[1]*3n + Z[2]*9n + Z[3]*27n, PRIME);
-console.log(`[Setup] Verify Z(3) = ${Z[0]} + ${Z[1]}*3 + ${Z[2]}*9 + ${Z[3]}*27 mod p = ${Z3} (expected 0)`);
+console.log(`[Setup] Verify Z vanishes at each constraint point:`);
+for (const pt of CONSTRAINT_POINTS) {
+  const val = mod(Z.reduce((acc, c, i) => acc + c * pt**BigInt(i), 0n), PRIME);
+  console.log(`[Setup]   Z(${pt}) = ${val} (expected 0)`);
+}
 
 console.log("\n[Setup] ===== Circuit Digest =====");
 console.log(`[Setup] The circuit digest is sha256 of the canonical circuit description:`);
