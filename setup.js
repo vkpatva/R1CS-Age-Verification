@@ -1,5 +1,6 @@
 const fs = require("fs");
 const crypto = require("crypto");
+const kzg = require("./kzg");
 
 // 2^61 - 1, a Mersenne prime.
 const PRIME = 2305843009213693951n;
@@ -295,6 +296,27 @@ const verificationKey = {
 };
 
 // ---------------------------------------------------------------------------
+// KZG Structured Reference String (SRS)
+// ---------------------------------------------------------------------------
+// The SRS must cover the highest-degree polynomial we will commit to.
+// H(x) has degree deg(P) - deg(Z) = (4k+2) - (2k+2) = 2k  (roughly).
+// We use 4*k+4 to be safe for all A,B,C,H.
+const srsDegree = 4 * k + 4;
+const srs = kzg.generateSRS(srsDegree);
+
+// Add SRS to both keys so prover and verifier can commit / verify.
+provingKey.kzg = {
+  tau: kzg.TAU.toString(),
+  srsDegree,
+  srs: srs.map(String),
+};
+verificationKey.kzg = {
+  tau: kzg.TAU.toString(),
+  srsDegree,
+  srs: srs.map(String),
+};
+
+// ---------------------------------------------------------------------------
 // Logging
 // ---------------------------------------------------------------------------
 console.log("========== SETUP START ==========");
@@ -344,9 +366,14 @@ console.log(`[Setup] circuitDigest = sha256(JSON({prime, lo, hi, constraintPoint
 console.log(`[Setup] circuitDigest = ${circuitDigest}`);
 console.log(`[Setup] Embeds the range [${lo},${hi}] — a proof for a different range will fail.`);
 
+console.log(`\n[Setup] ===== KZG Structured Reference String =====`);
+console.log(`[Setup] τ (tau) = ${kzg.TAU}  (trusted setup secret / "toxic waste")`);
+console.log(`[Setup] SRS degree needed: ${srsDegree}  (= 4k+4, covers deg H(x) ≈ 2k)`);
+kzg.logSRS(srs, srsDegree);
+
 fs.writeFileSync("proving_key.json", JSON.stringify(provingKey, null, 2), "utf8");
 fs.writeFileSync("verification_key.json", JSON.stringify(verificationKey, null, 2), "utf8");
 
-console.log(`\n[Setup] proving_key.json written.`);
-console.log(`[Setup] verification_key.json written.`);
+console.log(`\n[Setup] proving_key.json written (includes SRS).`);
+console.log(`[Setup] verification_key.json written (includes SRS).`);
 console.log("=========== SETUP END ===========");

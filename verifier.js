@@ -1,5 +1,6 @@
 const fs = require("fs");
 const crypto = require("crypto");
+const kzg = require("./kzg");
 
 // ---------------------------------------------------------------------------
 // Field arithmetic (BigInt, prime p = 2^61 - 1)
@@ -142,7 +143,7 @@ function logDetailedEvaluation(label, poly, r, p, result) {
   console.log(`[Verifier] ${label}(r) = ${result}`);
 }
 
-function logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p) {
+function logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p, degP) {
   console.log(`\n[Verifier] --- Step 4: QAP Identity Check ---`);
   console.log(`[Verifier] Check: A(r)*B(r) - C(r)  ==  H(r)*Z(r)  (mod p)`);
   console.log(`[Verifier]`);
@@ -150,7 +151,7 @@ function logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p) {
   console.log(`[Verifier]   If the prover has a valid witness then P(x)=A(x)*B(x)-C(x) = H(x)*Z(x)`);
   console.log(`[Verifier]   as a polynomial identity. By Schwartz-Zippel, if this does NOT hold`);
   console.log(`[Verifier]   everywhere but DOES hold at the random challenge r, the probability`);
-  console.log(`[Verifier]   is at most deg(P)/|F| = 4/${p} ≈ 2^-59.`);
+  console.log(`[Verifier]   is at most deg(P)/|F| = ${degP}/${p} ≈ 2^${(Math.log2(degP) - 61).toFixed(1)}.`);;
   console.log(`[Verifier]   So a passing check means the identity almost certainly holds everywhere.`);
   console.log(`[Verifier]`);
   console.log(`[Verifier] Z(r) is computed by the verifier from verification_key.json — public info.`);
@@ -276,13 +277,104 @@ function main() {
   // -------------------------------------------------------------------------
   // Step 4: QAP identity check
   // -------------------------------------------------------------------------
-  const passed = logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p);
+  const degP = 2 * (Z.length - 2); // deg(A*B) = 2*(numConstraints-1), numConstraints = Z.length-1
+  let passed = logDetailedQAPCheck(A_r, B_r, C_r, H_r, Z_r, p, degP);
+
+  // -------------------------------------------------------------------------
+  // Step 5: KZG opening proof verification
+  // -------------------------------------------------------------------------
+  console.log(`\n[KZG] ========== KZG OPENING PROOF VERIFICATION ==========`);
+  console.log(`[KZG] The verifier uses the KZG proofs to confirm each polynomial evaluation`);
+  console.log(`[KZG] WITHOUT needing the full polynomial coefficients.`);
+  console.log(`[KZG] (In this demo the coefficients are still in the proof for the Fiat-Shamir`);
+  console.log(`[KZG]  step above; in a full KZG system only the commitments + proofs are needed.)`);
+  console.log(`[KZG]`);
+
+  if (!proof.kzg) {
+    console.log(`[KZG] No KZG data in proof.json — skipping KZG verification.`);
+    console.log(`[KZG] (Re-run prover.js to generate a proof with KZG data.)`);
+  } else {
+    const kzgSRS = vk.kzg.srs.map(BigInt);
+    const kzgProof = proof.kzg;
+    const kzgR    = BigInt(kzgProof.evalPoint);
+    const kC_A    = BigInt(kzgProof.C_A);
+    const kC_B    = BigInt(kzgProof.C_B);
+    const kC_C    = BigInt(kzgProof.C_C);
+    const kC_H    = BigInt(kzgProof.C_H);
+    const ky_A    = BigInt(kzgProof.y_A);
+    const ky_B    = BigInt(kzgProof.y_B);
+    const ky_C    = BigInt(kzgProof.y_C);
+    const ky_H    = BigInt(kzgProof.y_H);
+    const kpi_A   = BigInt(kzgProof.pi_A);
+    const kpi_B   = BigInt(kzgProof.pi_B);
+    const kpi_C   = BigInt(kzgProof.pi_C);
+    const kpi_H   = BigInt(kzgProof.pi_H);
+
+    console.log(`[KZG] KZG evaluation point r = ${kzgR}`);
+    console.log(`[KZG]`);
+    console.log(`[KZG] Commitments from proof.json:`);
+    console.log(`[KZG]   C_A = ${kC_A}`);
+    console.log(`[KZG]   C_B = ${kC_B}`);
+    console.log(`[KZG]   C_C = ${kC_C}`);
+    console.log(`[KZG]   C_H = ${kC_H}`);
+    console.log(`[KZG]`);
+    console.log(`[KZG] Claimed evaluations:`);
+    console.log(`[KZG]   y_A = A(r) = ${ky_A}`);
+    console.log(`[KZG]   y_B = B(r) = ${ky_B}`);
+    console.log(`[KZG]   y_C = C(r) = ${ky_C}`);
+    console.log(`[KZG]   y_H = H(r) = ${ky_H}`);
+    console.log(`[KZG]`);
+    console.log(`[KZG] Opening proofs:`);
+    console.log(`[KZG]   π_A = ${kpi_A}`);
+    console.log(`[KZG]   π_B = ${kpi_B}`);
+    console.log(`[KZG]   π_C = ${kpi_C}`);
+    console.log(`[KZG]   π_H = ${kpi_H}`);
+    console.log(`[KZG]`);
+
+    // Cross-check: the KZG evaluations must match what the verifier computed
+    // from the committed polynomial coefficients (Step 3 above).
+    console.log(`[KZG] Cross-check: claimed KZG evaluations vs. verifier-recomputed evaluations:`);
+    const evalMatch_A = ky_A === A_r;
+    const evalMatch_B = ky_B === B_r;
+    const evalMatch_C = ky_C === C_r;
+    const evalMatch_H = ky_H === H_r;
+    console.log(`[KZG]   y_A (${ky_A}) ${evalMatch_A ? "==" : "!="} A(r) recomputed (${A_r})  →  ${evalMatch_A ? "✓" : "✗"}`);
+    console.log(`[KZG]   y_B (${ky_B}) ${evalMatch_B ? "==" : "!="} B(r) recomputed (${B_r})  →  ${evalMatch_B ? "✓" : "✗"}`);
+    console.log(`[KZG]   y_C (${ky_C}) ${evalMatch_C ? "==" : "!="} C(r) recomputed (${C_r})  →  ${evalMatch_C ? "✓" : "✗"}`);
+    console.log(`[KZG]   y_H (${ky_H}) ${evalMatch_H ? "==" : "!="} H(r) recomputed (${H_r})  →  ${evalMatch_H ? "✓" : "✗"}`);
+
+    // Verify each opening proof
+    const ok_A = kzg.verify(kC_A, kzgR, ky_A, kpi_A);
+    kzg.logVerify("A", kC_A, kzgR, ky_A, kpi_A, ok_A);
+
+    const ok_B = kzg.verify(kC_B, kzgR, ky_B, kpi_B);
+    kzg.logVerify("B", kC_B, kzgR, ky_B, kpi_B, ok_B);
+
+    const ok_C = kzg.verify(kC_C, kzgR, ky_C, kpi_C);
+    kzg.logVerify("C", kC_C, kzgR, ky_C, kpi_C, ok_C);
+
+    const ok_H = kzg.verify(kC_H, kzgR, ky_H, kpi_H);
+    kzg.logVerify("H", kC_H, kzgR, ky_H, kpi_H, ok_H);
+
+    const kzgAllPassed = ok_A && ok_B && ok_C && ok_H && evalMatch_A && evalMatch_B && evalMatch_C && evalMatch_H;
+    console.log(`\n[KZG] ===== KZG Verification Summary =====`);
+    console.log(`[KZG]   π_A valid: ${ok_A ? "✓" : "✗"}`);
+    console.log(`[KZG]   π_B valid: ${ok_B ? "✓" : "✗"}`);
+    console.log(`[KZG]   π_C valid: ${ok_C ? "✓" : "✗"}`);
+    console.log(`[KZG]   π_H valid: ${ok_H ? "✓" : "✗"}`);
+    console.log(`[KZG]   eval cross-check A: ${evalMatch_A ? "✓" : "✗"}`);
+    console.log(`[KZG]   eval cross-check B: ${evalMatch_B ? "✓" : "✗"}`);
+    console.log(`[KZG]   eval cross-check C: ${evalMatch_C ? "✓" : "✗"}`);
+    console.log(`[KZG]   eval cross-check H: ${evalMatch_H ? "✓" : "✗"}`);
+    console.log(`[KZG] Overall KZG: ${kzgAllPassed ? "PASS ✓" : "FAIL ✗"}`);
+    passed = passed && kzgAllPassed;
+  }
 
   console.log(`\n`);
   if (passed) {
-    console.log(`Verification SUCCESS: age is in [${lo}, ${hi}]  (QAP identity holds)`);
+    console.log(`Verification SUCCESS: age is in [${lo}, ${hi}]  (QAP identity holds + KZG proofs valid)`);
   } else {
-    console.log(`Verification FAILED: QAP identity does not hold.`);
+    console.log(`Verification FAILED: QAP identity does not hold or KZG proofs invalid.`);
   }
   console.log("========== VERIFIER END ==========");
 }
