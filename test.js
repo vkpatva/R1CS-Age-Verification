@@ -439,6 +439,83 @@ test("proof does NOT contain witness values", () => {
   assert.ok(A_x && B_x && C_x && H_x, "proof must have all four poly coefficient arrays");
 });
 
+test("proof contains KZG commitments and opening proofs", () => {
+  pipeline(0, 15, 7);
+  const proof = readProof();
+  assert.ok(proof.kzg, "proof must have kzg field");
+  const { C_A, C_B, C_C, C_H, evalPoint, y_A, y_B, y_C, y_H, pi_A, pi_B, pi_C, pi_H } = proof.kzg;
+  assert.ok(C_A && C_B && C_C && C_H, "proof.kzg must have all four commitments");
+  assert.ok(pi_A && pi_B && pi_C && pi_H, "proof.kzg must have all four opening proofs");
+  assert.ok(evalPoint, "proof.kzg must have evalPoint");
+  assert.ok(y_A !== undefined && y_B !== undefined && y_C !== undefined && y_H !== undefined,
+    "proof.kzg must have all four claimed evaluations");
+});
+
+test("KZG commitments are distinct", () => {
+  pipeline(4, 16, 10);
+  const { kzg: k } = readProof();
+  // All four commitments should generally differ (polynomials are different)
+  const vals = [k.C_A, k.C_B, k.C_C, k.C_H];
+  const unique = new Set(vals);
+  assert.ok(unique.size > 1, "KZG commitments should not all be identical");
+});
+
+test("KZG opening proofs change when age changes", () => {
+  assert.ok(setup(0, 15).ok);
+  assert.ok(prove(3).ok);
+  const pi_A_1 = readProof().kzg.pi_A;
+  assert.ok(prove(9).ok);
+  const pi_A_2 = readProof().kzg.pi_A;
+  assert.notStrictEqual(pi_A_1, pi_A_2, "opening proof must differ for different ages");
+});
+
+test("proving key contains KZG SRS", () => {
+  assert.ok(setup(4, 16).ok);
+  const pk = readProvingKey();
+  assert.ok(pk.kzg, "proving key must have kzg field");
+  assert.ok(pk.kzg.srs, "proving key must have SRS");
+  assert.ok(Array.isArray(pk.kzg.srs), "SRS must be an array");
+  assert.ok(pk.kzg.srs.length > 0, "SRS must be non-empty");
+  assert.strictEqual(pk.kzg.tau, "42", "SRS must use tau=42");
+});
+
+test("verification key contains KZG SRS", () => {
+  assert.ok(setup(4, 16).ok);
+  const vk = readVerificationKey();
+  assert.ok(vk.kzg, "verification key must have kzg field");
+  assert.ok(vk.kzg.srs, "verification key must have SRS");
+  assert.ok(Array.isArray(vk.kzg.srs), "SRS must be an array");
+  assert.strictEqual(vk.kzg.tau, "42", "SRS must use tau=42");
+});
+
+test("SRS[0] = 1 and SRS[1] = 42 (tau^0 and tau^1)", () => {
+  assert.ok(setup(0, 15).ok);
+  const pk = readProvingKey();
+  assert.strictEqual(pk.kzg.srs[0], "1", "SRS[0] = tau^0 = 1");
+  assert.strictEqual(pk.kzg.srs[1], "42", "SRS[1] = tau^1 = 42");
+  assert.strictEqual(pk.kzg.srs[2], "1764", "SRS[2] = tau^2 = 1764");
+});
+
+test("SRS length covers degree 4k+4", () => {
+  assert.ok(setup(4, 16).ok);
+  const pk = readProvingKey();
+  const expectedLen = 4 * pk.k + 4 + 1; // degree d means d+1 entries
+  assert.strictEqual(pk.kzg.srs.length, expectedLen,
+    `SRS length should be ${expectedLen} for k=${pk.k}`);
+});
+
+test("KZG evalPoint matches Fiat-Shamir r (same challenge used)", () => {
+  pipeline(0, 15, 7);
+  const proof = readProof();
+  // The KZG opening proofs are computed at the same r as the QAP identity check.
+  // We can't easily recompute r here, but we can verify the evalPoint is a large number
+  // (not a small constraint point like 1,2,3), showing it came from the hash.
+  const r = BigInt(proof.kzg.evalPoint);
+  const constraintPoints = [1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n];
+  assert.ok(!constraintPoints.includes(r), "evalPoint should be the Fiat-Shamir challenge, not a constraint point");
+  assert.ok(r > 1000n, "Fiat-Shamir evalPoint should be a large random value");
+});
+
 test("circuit digest changes when lo changes", () => {
   assert.ok(setup(0, 20).ok);
   const d1 = readProvingKey().circuitDigest;

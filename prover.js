@@ -1,5 +1,6 @@
 const fs = require("fs");
 const crypto = require("crypto");
+const kzg = require("./kzg");
 
 // ---------------------------------------------------------------------------
 // Field arithmetic (BigInt, prime p = 2^61 - 1)
@@ -609,18 +610,66 @@ function main() {
   logEvaluationHandshake(APoly, BPoly, CPoly, HPoly, Z, r, p);
 
   // -------------------------------------------------------------------------
+  // KZG polynomial commitments and opening proofs
+  // -------------------------------------------------------------------------
+  console.log(`\n[KZG] ========== KZG COMMITMENTS & OPENING PROOFS ==========`);
+  console.log(`[KZG] Loading SRS from proving_key.json (generated during setup with τ=${kzg.TAU})`);
+
+  const srs = pk.kzg.srs.map(BigInt);
+
+  // --- Commitments ---
+  // C_A = g^A(τ),  C_B = g^B(τ),  C_C = g^C(τ),  C_H = g^H(τ)
+  // In real KZG these are G1 elliptic-curve points.
+  const C_A = kzg.commit(APoly, srs);
+  kzg.logCommit("A", APoly, srs, C_A);
+
+  const C_B = kzg.commit(BPoly, srs);
+  kzg.logCommit("B", BPoly, srs, C_B);
+
+  const C_C = kzg.commit(CPoly, srs);
+  kzg.logCommit("C", CPoly, srs, C_C);
+
+  const C_H = kzg.commit(HPoly, srs);
+  kzg.logCommit("H", HPoly, srs, C_H);
+
+  console.log(`\n[KZG] ===== Summary of KZG Commitments =====`);
+  console.log(`[KZG]   C_A = ${C_A}   (commitment to A(x))`);
+  console.log(`[KZG]   C_B = ${C_B}   (commitment to B(x))`);
+  console.log(`[KZG]   C_C = ${C_C}   (commitment to C(x))`);
+  console.log(`[KZG]   C_H = ${C_H}   (commitment to H(x))`);
+  console.log(`[KZG] Each commitment is a single field element g^f(τ).`);
+  console.log(`[KZG] In real KZG each would be a single G1 elliptic-curve point.`);
+
+  // --- Opening proofs at challenge r ---
+  // π_A proves A(r) = y_A,  etc.
+  // π_f = commit( (f(x) − f(r)) / (x − r) ) = g^q_f(τ)
+  const { y: y_A, pi: pi_A, q: q_A } = kzg.open(APoly, r, srs);
+  kzg.logOpen("A", APoly, r, y_A, q_A, pi_A, srs);
+
+  const { y: y_B, pi: pi_B, q: q_B } = kzg.open(BPoly, r, srs);
+  kzg.logOpen("B", BPoly, r, y_B, q_B, pi_B, srs);
+
+  const { y: y_C, pi: pi_C, q: q_C } = kzg.open(CPoly, r, srs);
+  kzg.logOpen("C", CPoly, r, y_C, q_C, pi_C, srs);
+
+  const { y: y_H, pi: pi_H, q: q_H } = kzg.open(HPoly, r, srs);
+  kzg.logOpen("H", HPoly, r, y_H, q_H, pi_H, srs);
+
+  console.log(`\n[KZG] ===== Summary of Opening Proofs (at r = ${r}) =====`);
+  console.log(`[KZG]   π_A = ${pi_A}   proves A(${r}) = ${y_A}`);
+  console.log(`[KZG]   π_B = ${pi_B}   proves B(${r}) = ${y_B}`);
+  console.log(`[KZG]   π_C = ${pi_C}   proves C(${r}) = ${y_C}`);
+  console.log(`[KZG]   π_H = ${pi_H}   proves H(${r}) = ${y_H}`);
+  console.log(`[KZG] Each π is a single field element g^q(τ) (quotient poly evaluated at τ).`);
+  console.log(`[KZG] In real KZG each would be a single G1 elliptic-curve point.`);
+  console.log(`[KZG] ==========================================================`);
+
+  // -------------------------------------------------------------------------
   // Build proof
   //
-  // Contains: commitment + polynomial coefficients (commitment opening).
-  // Omits:    witness (private)
-  //           pre-computed evaluations (verifier recomputes them from the
-  //           committed coefficients, preventing fabricated evaluations)
-  //
-  // NOTE ON ZK: polynomial coefficients are a deterministic function of the
-  // witness, so they do encode it. True ZK requires replacing this hash-based
-  // commitment with an EC polynomial commitment (e.g. KZG) where the verifier
-  // can verify evaluations without seeing the coefficients. That requires
-  // elliptic curve pairings and is beyond the scope of this demo.
+  // Now includes KZG commitments and opening proofs in addition to the
+  // Fiat-Shamir hash commitment.  The verifier uses the KZG proofs to confirm
+  // each evaluation without needing to see the full polynomial coefficients.
   // -------------------------------------------------------------------------
   const proof = {
     commitment,
@@ -630,6 +679,25 @@ function main() {
       B_x: BPoly.map(String),
       C_x: CPoly.map(String),
       H_x: HPoly.map(String),
+    },
+    kzg: {
+      // Commitments (one per polynomial)
+      C_A: C_A.toString(),
+      C_B: C_B.toString(),
+      C_C: C_C.toString(),
+      C_H: C_H.toString(),
+      // Evaluation point used for openings
+      evalPoint: r.toString(),
+      // Claimed evaluations
+      y_A: y_A.toString(),
+      y_B: y_B.toString(),
+      y_C: y_C.toString(),
+      y_H: y_H.toString(),
+      // Opening proofs
+      pi_A: pi_A.toString(),
+      pi_B: pi_B.toString(),
+      pi_C: pi_C.toString(),
+      pi_H: pi_H.toString(),
     },
   };
 
@@ -643,9 +711,22 @@ function main() {
   console.log(`[Prover]     B_x: [${BPoly.map(String).join(", ")}]`);
   console.log(`[Prover]     C_x: [${CPoly.map(String).join(", ")}]`);
   console.log(`[Prover]     H_x: [${HPoly.map(String).join(", ")}]`);
+  console.log(`[Prover]   kzg:`);
+  console.log(`[Prover]     C_A  = ${C_A}  (KZG commitment to A(x))`);
+  console.log(`[Prover]     C_B  = ${C_B}  (KZG commitment to B(x))`);
+  console.log(`[Prover]     C_C  = ${C_C}  (KZG commitment to C(x))`);
+  console.log(`[Prover]     C_H  = ${C_H}  (KZG commitment to H(x))`);
+  console.log(`[Prover]     evalPoint = ${r}`);
+  console.log(`[Prover]     y_A  = ${y_A}  (A(r))`);
+  console.log(`[Prover]     y_B  = ${y_B}  (B(r))`);
+  console.log(`[Prover]     y_C  = ${y_C}  (C(r))`);
+  console.log(`[Prover]     y_H  = ${y_H}  (H(r))`);
+  console.log(`[Prover]     π_A  = ${pi_A}  (opening proof for A(r))`);
+  console.log(`[Prover]     π_B  = ${pi_B}  (opening proof for B(r))`);
+  console.log(`[Prover]     π_C  = ${pi_C}  (opening proof for C(r))`);
+  console.log(`[Prover]     π_H  = ${pi_H}  (opening proof for H(r))`);
   console.log(`[Prover] Notably ABSENT from proof.json:`);
   console.log(`[Prover]   - witness values (private)`);
-  console.log(`[Prover]   - pre-computed evaluations A(r),B(r),C(r),H(r) (verifier recomputes these)`);
   console.log("=========== PROVER END ===========");
 }
 

@@ -1,8 +1,8 @@
-# ZK Dynamic Range Proof (R1CS → QAP) Demo
+# ZK Dynamic Range Proof (R1CS → QAP → KZG) Demo
 
 An educational, from-scratch implementation of a **zero-knowledge range proof** that proves `lo ≤ age ≤ hi` for any verifier-specified range, without revealing the actual age.
 
-Built on: R1CS → QAP → Lagrange interpolation → Fiat–Shamir → single-point identity check.
+Built on: R1CS → QAP → Lagrange interpolation → Fiat–Shamir → single-point identity check → **KZG polynomial commitments**.
 All arithmetic uses JS `BigInt` in field **F_(2^61−1)** (Mersenne prime).
 
 ---
@@ -313,14 +313,81 @@ public verification key. The prover never reveals `age`, `a`, or `b`.
 
 ---
 
+### Step 9 — KZG Polynomial Commitments
+
+The system now includes **KZG (Kate-Zaverucha-Goldberg) polynomial commitments**, which
+replace the hash-based commitment for individual polynomial evaluations and add a second
+layer of cryptographic verification.
+
+#### Trusted setup
+
+During `setup.js`, a **Structured Reference String (SRS)** is generated using a fixed
+secret `τ = 42` (the "toxic waste"):
+
+```
+SRS[i] = τ^i mod p    for i = 0, 1, ..., 4k+4
+```
+
+In real KZG these would be elliptic curve points `[τ^i]G ∈ G1`. Here we simulate the
+group using field elements in F_p, replacing EC operations with field arithmetic:
+
+| Real KZG (EC group G1) | This simulation (F_p field) |
+|---|---|
+| `[x]G` (EC point) | `x ∈ F_p` |
+| `k · [x]G` (scalar mult) | `k · x mod p` |
+| `[x]G + [y]G` (group add) | `(x + y) mod p` |
+| `e(a, b)` (pairing) | `a · b mod p` |
+
+#### What the prover produces
+
+After computing A(x), B(x), C(x), H(x), the prover generates:
+
+| Value | Formula | Meaning |
+|---|---|---|
+| `C_A` | `A(τ) = Σ a[i]·τ^i mod p` | KZG commitment to A(x) |
+| `C_B` | `B(τ)` | KZG commitment to B(x) |
+| `C_C` | `C(τ)` | KZG commitment to C(x) |
+| `C_H` | `H(τ)` | KZG commitment to H(x) |
+| `π_A` | `q_A(τ)` where `q_A(x) = (A(x)−A(r))/(x−r)` | Opening proof for A(r) |
+| `π_B` | `q_B(τ)` | Opening proof for B(r) |
+| `π_C` | `q_C(τ)` | Opening proof for C(r) |
+| `π_H` | `q_H(τ)` | Opening proof for H(r) |
+
+The evaluation point `r` is the same Fiat–Shamir challenge used for the QAP identity check.
+
+#### How the verifier checks a KZG opening proof
+
+For each polynomial `f` with commitment `C = f(τ)`, claimed evaluation `y = f(r)`,
+and opening proof `π = q(τ)` where `q(x) = (f(x)−y)/(x−r)`:
+
+```
+Real KZG:   e( C − y·G,  G₂ )  ==  e( π,  [τ]G₂ − [r]G₂ )
+
+Simulated:  C − y  ==  π · (τ − r)   mod p
+```
+
+This works because `f(x) − f(r) = q(x) · (x−r)` as a polynomial identity,
+so evaluating both sides at `x = τ` gives `C − y = π·(τ−r)` exactly.
+
+The verifier also cross-checks the KZG claimed evaluations `y_A, y_B, y_C, y_H`
+against its own recomputed values from the polynomial coefficients, ensuring consistency.
+
+#### Note on hiding
+
+In this simulation, `τ = 42` is public, so the commitments do not hide the polynomials.
+In real KZG over an elliptic curve, `τ` is destroyed after the trusted setup ceremony —
+the SRS points `[τ^i]G` reveal nothing about `τ` without solving the discrete log problem.
+
+---
+
 ## Architecture: Three-Stage Pipeline
 
 ### `setup.js <lo> <hi>`
 
 Builds the circuit for range `[lo, hi]` and writes two key files:
 
-- **`proving_key.json`** — full R1CS matrices + Z(x) + circuit digest (used by prover)
-- **`verification_key.json`** — Z(x) + circuit digest + range only (used by verifier; no R1CS)
+- **`proving_key.json`** — R1CS matrices, Z(x), circuit digest, KZG SRS
+- **`verification_key.json`** — Z(x), circuit digest, KZG SRS (no R1CS)
 
 The circuit digest is `sha256(prime ‖ lo ‖ hi ‖ constraintPoints ‖ R1CS)`.
 It binds every proof to the exact circuit — a proof created for `[0, 15]` will be rejected
@@ -334,17 +401,20 @@ by a verifier holding a `[0, 30]` key, because the circuit digests differ.
 4. Evaluates R1CS dot products at each constraint point
 5. Lagrange-interpolates to get polynomials `A(x)`, `B(x)`, `C(x)`
 6. Divides `P(x) = A(x)·B(x) − C(x)` by `Z(x)` to get `H(x)` (zero remainder = valid witness)
-7. Generates a random `salt`; computes commitment `sha256(circuitDigest ‖ salt ‖ A_x ‖ B_x ‖ C_x ‖ H_x)`
-8. Writes **`proof.json`** — commitment + polynomial coefficients (**witness is never written**)
+7. Generates random `salt`; computes Fiat–Shamir commitment and challenge `r`
+8. **KZG commitments**: computes `C_A = A(τ)`, `C_B = B(τ)`, `C_C = C(τ)`, `C_H = H(τ)`
+9. **KZG opening proofs**: computes `π_A, π_B, π_C, π_H` by dividing each polynomial by `(x − r)` and evaluating at `τ`
+10. Writes **`proof.json`** — commitment, polynomial coefficients, KZG data (**witness never written**)
 
 ### `verifier.js`
 
 Reads only `verification_key.json` (never sees R1CS or witness):
 
-1. **Commitment check** — recomputes commitment from proof coefficients + own `circuitDigest`; must match
+1. **Commitment check** — recomputes hash commitment from proof coefficients + own `circuitDigest`; must match
 2. **Derive r** — re-derives Fiat–Shamir point `r` from verified commitment
 3. **Evaluate** — computes `A(r)`, `B(r)`, `C(r)`, `H(r)` from committed coefficients; `Z(r)` from vk
 4. **QAP check** — verifies `A(r)·B(r) − C(r) ≡ H(r)·Z(r)` (mod p)
+5. **KZG verification** — for each polynomial, checks opening proof: `C − y == π·(τ−r)` and cross-validates evaluations
 
 ---
 
@@ -352,9 +422,33 @@ Reads only `verification_key.json` (never sees R1CS or witness):
 
 | File | Written by | Read by | Contains |
 |------|-----------|---------|----------|
-| `proving_key.json` | setup | prover | R1CS, Z(x), range, k, circuitDigest |
-| `verification_key.json` | setup | verifier | Z(x), range, circuitDigest (no R1CS) |
-| `proof.json` | prover | verifier | commitment, salt, polynomial coefficients |
+| `proving_key.json` | setup | prover | R1CS, Z(x), range, k, circuitDigest, KZG SRS |
+| `verification_key.json` | setup | verifier | Z(x), range, circuitDigest, KZG SRS (no R1CS) |
+| `proof.json` | prover | verifier | commitment, salt, poly coefficients, KZG commitments + opening proofs |
+
+### `proof.json` structure
+
+```json
+{
+  "commitment": "<sha256 hash>",
+  "salt": "<random hex>",
+  "polynomialCoefficients": {
+    "A_x": [...],
+    "B_x": [...],
+    "C_x": [...],
+    "H_x": [...]
+  },
+  "kzg": {
+    "C_A": "<A(τ)>",      "C_B": "<B(τ)>",
+    "C_C": "<C(τ)>",      "C_H": "<H(τ)>",
+    "evalPoint": "<r>",
+    "y_A": "<A(r)>",      "y_B": "<B(r)>",
+    "y_C": "<C(r)>",      "y_H": "<H(r)>",
+    "pi_A": "<q_A(τ)>",   "pi_B": "<q_B(τ)>",
+    "pi_C": "<q_C(τ)>",   "pi_H": "<q_H(τ)>"
+  }
+}
+```
 
 ---
 
@@ -366,6 +460,7 @@ r = BigInt(sha256(commitment | circuitDigest | counter)) mod p
 
 - `counter` increments if `r` lands on a forbidden point (where `Z(r) = 0`)
 - Using the full 256-bit hash before reducing mod p keeps modular bias below 2⁻¹⁹⁵
+- The same `r` is used for both the QAP identity check and the KZG opening proofs
 
 Soundness error (Schwartz–Zippel): a cheating prover passes with probability at most `deg(P) / |F|`.
 
@@ -377,39 +472,49 @@ Soundness error (Schwartz–Zippel): a cheating prover passes with probability a
 
 ---
 
-## ZK Limitation Note
+## Files
 
-**This demo is not zero-knowledge.** The polynomial coefficients in `proof.json` are a
-deterministic function of the witness — a verifier who receives them can reconstruct `age`,
-`a = age − lo`, and `b = hi − age` exactly by evaluating the polynomials at the constraint
-points and reading off the R1CS dot products.
-
-The random `salt` only prevents two proofs for the same age from having identical commitments
-(commitment uniqueness / unlinkability between runs). It does **not** hide the coefficients
-themselves from the verifier.
-
-### What true ZK requires
-
-Replace the hash-based commitment with a **KZG (Kate) polynomial commitment**:
-
-1. **Trusted setup** — a one-time ceremony produces a structured reference string
-   `[τ⁰]G, [τ¹]G, …, [τⁿ]G` (elliptic curve points encoding powers of a secret `τ`).
-2. **Commit** — the prover sends a single curve point `C = [f(τ)]G` per polynomial,
-   with a random blinding factor added. The verifier sees only this point — never the coefficients.
-3. **Evaluation proof** — to prove `f(r) = v`, the prover sends a short quotient commitment;
-   the verifier checks it with a **pairing equation** `e(C − [v]G, G) = e([q(τ)]G, [τ − r]G)`.
-   No coefficients are ever revealed.
-
-This requires bilinear pairings over a pairing-friendly curve (e.g. BN254) and is beyond the
-scope of this educational demo.
+| File | Role |
+|------|------|
+| `setup.js` | Builds R1CS, QAP, Z(x), computes circuit digest, generates KZG SRS |
+| `prover.js` | Witness construction, Lagrange interpolation, P/H computation, Fiat–Shamir, KZG commits + opens |
+| `verifier.js` | Commitment check, QAP identity check, KZG opening proof verification |
+| `kzg.js` | Self-contained KZG module: `generateSRS`, `commit`, `open`, `verify` + logging helpers |
+| `test.js` | 78 tests across 8 groups |
 
 ---
 
 ## Running Tests
 
 ```bash
-node test.js          # 70 tests across 7 groups
+node test.js          # 78 tests across 8 groups
 ```
 
 Tests cover: setup validation, full pipeline for many ranges, boundary values, out-of-range
-rejection, proof tampering, cross-range replay attacks, and circuit structure verification.
+rejection, proof tampering, cross-range replay attacks, circuit structure verification,
+and KZG commitment/proof structure.
+
+---
+
+## ZK Limitation Note
+
+**This demo is not fully zero-knowledge.** The polynomial coefficients in `proof.json` are
+still included for the Fiat–Shamir commitment step, and from them a verifier can reconstruct
+the witness values.
+
+The KZG layer adds **binding** (you cannot forge an opening proof without knowing `τ`) but
+not **hiding** in this simulation, because:
+1. `τ = 42` is public, so `C = f(τ)` can be reversed if you know τ
+2. The polynomial coefficients are still sent alongside the KZG data
+
+### What full ZK would require
+
+In a production KZG system:
+1. **Trusted setup ceremony** — multiple parties compute the SRS over an elliptic curve
+   (e.g. BN254) and destroy their shares of `τ`. No single party knows `τ`.
+2. **Hiding commitments** — add a random blinding factor to each commitment so the
+   verifier cannot learn `f(τ)` even from the commitment alone.
+3. **Drop the coefficients** — the verifier only receives `C_A, C_B, C_C, C_H, π_A, π_B, π_C, π_H`
+   and uses pairing equations to verify without seeing any polynomial coefficients.
+4. **Pairing check** — `e(C − y·G, G₂) = e(π, [τ]G₂ − [r]G₂)` using a bilinear pairing
+   on the elliptic curve. This requires a pairing-friendly curve like BN254 or BLS12-381.
